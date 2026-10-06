@@ -1,0 +1,4 @@
+# dsh-local-plugins bundle patch: one row mounts the server routes and the web client.
+- insert:
+    - id: dsh-local-plugins
+      name: dsh-local-plugins

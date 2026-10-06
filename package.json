@@ -1,0 +1,50 @@
+{
+  "name": "dsh-local-plugins",
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": ["dsh-plugin", "dsh", "deepseek-harness"],
+  "repository": { "type": "git", "url": "git+https://github.com/ishanshmalviya5/dsh-local-plugins.git" },
+  "homepage": "https://github.com/ishanshmalviya5/dsh-local-plugins#readme",
+  "bugs": { "url": "https://github.com/ishanshmalviya5/dsh-local-plugins/issues" },
+  "description": "Keep locally-edited dsh plugins (third-party and core) as git repos, deploy exact commits, and update them from their origin.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "scripts",
+    "test/e2e/setup.sh",
+    "test/e2e/start.sh",
+    "test/e2e/teardown.sh",
+    "test/e2e/api-scenarios.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "screenshots.json",
+    "assets"
+  ],
+  "scripts": {
+    "build": "node client/build.mjs",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\""
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
