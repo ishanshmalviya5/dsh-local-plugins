@@ -19,8 +19,9 @@ const live = (name) => realpathSync(w.env.stableLink(name));
 
 test('registry round-trips and writes atomically', () => {
   const file = join(w.base, 'r', 'registry.json');
-  saveRegistry(file, { version: 1, plugins: { a: { name: 'a' } } });
-  assert.deepEqual(loadRegistry(file).plugins.a, { name: 'a' });
+  const entry = { name: 'a', kind: 'profile', source: { type: 'npm', name: 'a' }, custom: 'kept' };
+  saveRegistry(file, { version: 2, plugins: { a: entry } });
+  assert.deepEqual(loadRegistry(file).plugins.a, entry, 'unknown fields survive');
   assert.deepEqual(readdirSync(join(w.base, 'r')), ['registry.json']);
 });
 
@@ -86,7 +87,7 @@ test('commit-only rule: uncommitted edits never reach the live snapshot; Apply d
   assert.match(readFileSync(join(live(CORE), 'lib/index.js'), 'utf8'), /v = 3/);
 });
 
-test('profile plugin: migrate from npm, apply links the profile to the stable link, restore installs latest', async () => {
+test('profile plugin: migrate from npm, apply links the profile to the stable link, restore reinstalls the original spec', async () => {
   await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
   await w.mgr.apply({ name: 'lpm-npm' }, w.log);
   const pkg = JSON.parse(readFileSync(join(w.profileDir, 'package.json'), 'utf8'));
@@ -96,7 +97,7 @@ test('profile plugin: migrate from npm, apply links the profile to the stable li
 
   await w.mgr.restore({ name: 'lpm-npm' }, w.log);
   const after = JSON.parse(readFileSync(join(w.profileDir, 'package.json'), 'utf8'));
-  assert.equal(after.dependencies['lpm-npm'], 'latest');
+  assert.equal(after.dependencies['lpm-npm'], '^1.0.0', 'the spec the profile had, not @latest');
   assert.equal(reg().plugins['lpm-npm'].applied, false);
   assert.ok(existsSync(w.env.stableLink('lpm-npm')), 'snapshots kept for a fast re-apply');
 });
@@ -154,7 +155,7 @@ test('npm update with conflict: pending worktree, live untouched, finish require
 test('git origin: add new, build on apply; a failing build leaves the live link alone', async () => {
   const origin = makeGitOrigin(w.base, 'lpm-git');
   await w.mgr.addNew({ input: origin.url }, w.log);
-  await w.mgr.apply({ name: 'lpm-git' }, w.log);
+  await w.mgr.apply({ name: 'lpm-git', allowScripts: true }, w.log);
   assert.ok(existsSync(join(live('lpm-git'), 'built.txt')), 'build script ran in the snapshot');
   const good = live('lpm-git');
 
@@ -162,7 +163,7 @@ test('git origin: add new, build on apply; a failing build leaves the live link 
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
   pkg.scripts.build = 'node -e "process.exit(3)"';
   writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
-  await assert.rejects(w.mgr.apply({ name: 'lpm-git' }, w.log), /exited 3/);
+  await assert.rejects(w.mgr.apply({ name: 'lpm-git', allowScripts: true }, w.log), /exited 3/);
   assert.equal(live('lpm-git'), good);
   assert.match(reg().plugins['lpm-git'].lastError, /exited 3/);
 });
@@ -176,7 +177,7 @@ test('git origin update: new upstream commit merges cleanly', async () => {
   g(origin.work, 'push', '-q', 'origin', 'main');
   await w.mgr.checkUpdates({ names: ['lpm-git'] }, w.log);
   assert.equal(reg().plugins['lpm-git'].update.available, true);
-  assert.equal((await w.mgr.update({ name: 'lpm-git' }, w.log)).status, 'merged');
+  assert.equal((await w.mgr.update({ name: 'lpm-git', allowScripts: true }, w.log)).status, 'merged');
   assert.ok(existsSync(join(w.env.repoDir('lpm-git'), 'feature.js')));
 });
 
@@ -265,7 +266,7 @@ test('git origin with release tags: updates follow the newest stable tag, not br
   g(origin.work, 'push', '-q', '--tags', 'origin', 'main');
   await w.mgr.checkUpdates({ names: ['lpm-tagged'] }, w.log);
   assert.deepEqual([reg().plugins['lpm-tagged'].update.available, reg().plugins['lpm-tagged'].update.target], [true, 'v1.1.0']);
-  assert.equal((await w.mgr.update({ name: 'lpm-tagged' }, w.log)).status, 'merged');
+  assert.equal((await w.mgr.update({ name: 'lpm-tagged', allowScripts: true }, w.log)).status, 'merged');
   assert.ok(existsSync(join(dir, 'released.js')) && existsSync(join(dir, 'unreleased.js')), 'got v1.1.0 (which contains the earlier commit)');
   assert.ok(!existsSync(join(dir, 'after-release.js')), 'post-release commits are not pulled');
   assert.equal(reg().plugins['lpm-tagged'].upstreamVersion, 'v1.1.0');

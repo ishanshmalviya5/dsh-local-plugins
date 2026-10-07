@@ -1,27 +1,25 @@
 # dsh-local-plugins
 
-A dsh plugin that keeps edited dsh plugins — both profile (third-party) plugins and core `@deepseek-ai/*` packages — as local git repos, deploys only committed snapshots through an atomic symlink swap, and updates from their origin (npm releases or git release tags) in a separate worktree with conflict handling.
+Keep the dsh plugins you have edited — third-party plugins **and** built-in `@deepseek-ai/*` packages — as ordinary git repos, run them in dsh **only as exact commits**, and update them from their origin without losing your changes.
 
-> **Warning — core package apply writes inside the global dsh install.** It moves the original package folder to `.backup/<pkg>@<ver>` and replaces it with a symlink to the deployed snapshot. This requires write access to the global npm install of dsh. After a dsh upgrade, use **Reapply all** to restore links.
+> **dsh only ever runs a commit.** Never your working tree, never a half-merged update. A deployment is built in its own folder first and switched on by one atomic rename; if anything fails, the previous deployment is still the live one.
 
-> **Warning — "Restart dsh web" relaunches the dsh process** with its original command line. Open chats will reconnect after the restart completes.
+## Read this first
 
-## What it does
+* **Some plugins run scripts on your computer, with your full access.** Install and build scripts are **off by default**. If a plugin needs them (a git plugin's `build`, or a library's `postinstall`), the plugin stops and asks: *Allow this time* or *Always allow for this plugin* (bound to the npm publisher account / git origin you approved). See [docs/security.md](docs/security.md).
+* **Overriding a built-in dsh package writes inside your dsh install.** The original folder is moved to a backup and replaced by a link to your version; *Unlink* puts it back, and if dsh crashes after an Apply it is put back automatically. This needs write access to the global dsh install.
+* **Restart dsh web** to load a change. The *Restart dsh web* button relaunches it with its original command line; open chats reconnect.
 
-- Keeps each plugin as a local git repo (`$DSH_HOME/local-plugins/<name>`; scoped names become `@scope__pkg`).
-- `upstream` branch = pristine original; `local` branch = your edits.
-- **Commit-only deploy:** uncommitted edits are auto-committed first; Apply deploys the chosen commit from `local` (or an older rollback commit) through a detached worktree `.deployed/<name>@<sha>`; only if the build succeeds is `.deployed/<name>` swapped atomically.
-- Keeps the 3 most recent snapshots (`KEEP_SNAPSHOTS = 3`); older ones are pruned.
-- Updates: checked 5 s after startup and by the "Check now" button. Merges run in a separate worktree (`.work/<name>`) so the live plugin never sees a half-merged tree. Conflicts list the files and offer **Finish update**, **Abort**, or **Fix with agent**.
-- Agent buttons ("Work on it", "Fix with agent") create a dsh session in the repo or worktree with the `standard` agent preset and a prefilled, unsent draft.
-- Dependency overrides (e.g. pin a transitive dep to `latest`) are committed on `local` and take effect on Apply.
+## What you get
 
-## Requirements
-
-- `git`, `npm`, `rsync` on `PATH`.
-- Write access to the global dsh install (only for core `@deepseek-ai/*` package overrides).
-- Tested on: macOS with dsh 0.2.0-rc.2 and Node 26.
-- Linux is plausible but **untested**. Windows is **not supported** (symlink + rsync dependency).
+* **Two branches per plugin:** `upstream` is the pristine original, `local` is your edits. An update is an ordinary git merge — done in a separate worktree, so conflicts never touch the live plugin.
+* **Safe deploys:** build aside → verify (dependencies present, entry files exist, every JS file parses) → atomic switch. A failed build, install or check changes nothing. Roll back to any kept deployment in one click.
+* **Crash safety:** every Apply is journaled; whatever a dead process left behind is finished or rolled back at the next start. If a freshly applied plugin makes dsh restart within 60 seconds, it is reverted, your work is saved to a git stash + rescue branch, and a popup explains it. [How recovery works](docs/recovery.md)
+* **Plain states** (Applied, Changes pending, Update available, Conflict, Link lost, Reapply required, Broken, Disabled) and a primary action that follows the state. [State machine](docs/state-machine.md)
+* **dsh upgrades handled:** after an upgrade resets links, plugins show *Reapply required*, never "active"; *Reapply all* is safe to repeat.
+* **Origins:** npm (`name`, `name@1.2.3`, `name@tag`) and git (newest release tag, or pin `url#tag`, `#branch`, `#commit`).
+* **Repair installation**, **Recent operations** (logs, durations, retry), **Disk usage** and a safe **Clean up**, **Unlink** (restore the original) and **Delete local plugin** (repo moves to a recoverable trash).
+* **Agent buttons** (*Work on it*, *Fix with agent*) open a dsh session in **Creator mode** in the repo or the conflicted worktree, with a prefilled, unsent prompt that treats repository text as data, works only through git, and forbids touching the live install or bypassing the manager.
 
 ## Install
 
@@ -29,41 +27,45 @@ A dsh plugin that keeps edited dsh plugins — both profile (third-party) plugin
 dsh plugin --profile web add github:ishanshmalviya5/dsh-local-plugins
 ```
 
-Then restart dsh web (either through the app or via the "Restart dsh web" button in Settings → Local Plugins).
+Restart dsh web. Settings → **Local Plugins** appears, plus a sidebar badge when something needs attention. After a dsh upgrade, open it and click **Reapply all**.
 
-After a dsh upgrade, open Settings → Local Plugins and click **Reapply all**.
+## Using it
 
-## Usage walkthrough
+1. **+ Add → Migrate** an installed plugin (your hand edits are captured as a commit) — or add from an npm name / git address.
+2. Edit in the repo (`~/.dsh/local-plugins/<name>`, branch `local`), or click **Work on it** to let an agent do it.
+3. **Commit.** (Apply also commits anything left uncommitted first.)
+4. **Apply** — builds, checks and switches on the commit. Restart dsh web.
+5. **Update** when the origin has a new release; resolve conflicts in the worktree; **Finish update**; Apply.
+6. **Deploy older commit…** to roll back. **Unlink (restore original)** gives dsh its own plugin back; your repo stays tracked.
 
-1. **Migrate an installed plugin** (or **New from origin** with an npm name / git URL).
-2. Edit in the repo (`~/.dsh/local-plugins/<name>`): the `local` branch holds your edits.
-3. **Commit** your changes.
-4. **Apply** to deploy the commit atomically.
-5. **Restart dsh web** to load the deployed snapshot (required after Apply/Restore).
-6. **Update**: click "Check now" or wait for the automatic check; merge conflicts are resolved in the worktree; click **Finish update** (only when no conflict markers remain), then **Apply**.
-7. **Rollback**: "Deploy older commit…" picks one of the 3 kept snapshots.
-8. **Restore original**: the repo stays tracked — **Apply** switches back to your edited version.
+If dsh will not start, from a terminal: `node ~/.dsh/local-plugins/.deployed/dsh-local-plugins/scripts/undo.mjs --all`.
 
-The commit-only rule: the working tree is never deployed directly; only committed snapshots reach `.deployed/`.
+## Compatibility
 
-## Tests
+| dsh-local-plugins | dsh | Node | macOS | Linux | Windows |
+|---|---|---|---|---|---|
+| 0.2.0 | 0.2.0-rc.2 | >= 26 | **tested** (arm64, Node 26.8) | CI only; **not verified by the maintainer** | refused with a clear message |
 
-```bash
-npm test        # 14 unit tests (node:test, temp dirs, no dsh needed)
-```
+* Needs `git` and `npm` on `PATH`. No runtime dependencies, no `rsync`.
+* `@deepseek-ai/cordis` is a peer dependency provided by dsh; this version was checked against the one shipped with dsh 0.2.0-rc.2.
+* CI (`.github/workflows/ci.yml`) runs macOS + Node 26 as the required job, and Linux with Node 22/24/26 as *experimental* jobs. Nothing is claimed for a platform until its job is green.
+* Upgrading from 0.1: automatic and lossless — the registry is migrated (the old file is kept as `registry.json.v1.bak`) and live deployments are adopted. See [CHANGELOG.md](CHANGELOG.md).
 
-End-to-end (isolated dsh copy at `~/.dsh-test`, port 3091):
+## Documentation
 
-```bash
-test/e2e/setup.sh
-node test/e2e/api-scenarios.mjs   # 13 end-to-end scenarios
-```
+[Architecture](docs/architecture.md) · [State machine](docs/state-machine.md) · [Recovery](docs/recovery.md) · [Security](docs/security.md) · [HTTP API](docs/api.md) · [Troubleshooting](docs/troubleshooting.md) · [Performance](docs/performance.md) · [Development](docs/development.md) · [Release checklist](docs/release-checklist.md)
+
+## Known limitations
+
+* A plugin that crashes dsh *before* this manager loads cannot be reverted automatically — use `scripts/undo.mjs`.
+* The load check proves files parse and entry files exist; it does not run the plugin.
+* Updates for core packages follow the version bundled with your dsh install, not newer npm releases.
+* Linux and Node versions other than 26 are untested by the maintainer; Windows is unsupported.
+* The operation queue refuses a second action while one runs (`BUSY`) rather than queueing it.
 
 ## Development
 
-`npm install && npm run build` rebuilds `client/client.js` (committed bundle; required for git installs).
-
-`scripts/self-deploy.sh` is a maintainer tool for running the manager itself commit-only; it is not the normal install method.
+`npm run check` (lint + tests + package validation), `npm run test:e2e` (isolated live dsh), `npm run bench`. See [docs/development.md](docs/development.md).
 
 ## License
 

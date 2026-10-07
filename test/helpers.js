@@ -39,6 +39,12 @@ const pdir = path.join(process.env.DSH_HOME, 'profiles', profile);
 const pj = path.join(pdir, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'));
 fs.appendFileSync(path.join(pdir, 'cli.log'), args.join(' ') + '\\n');
+if (action === 'remove') {
+  delete pkg.dependencies[spec];
+  fs.writeFileSync(pj, JSON.stringify(pkg, null, 2));
+  fs.rmSync(path.join(pdir, 'node_modules', spec), { recursive: true, force: true });
+  process.exit(0);
+}
 if (action !== 'add') process.exit(0);
 let name, value;
 if (spec.startsWith('link:')) { const target = spec.slice(5); name = JSON.parse(fs.readFileSync(path.join(target, 'package.json'))).name; value = spec; }
@@ -57,6 +63,7 @@ export function makeWorld() {
   const dshHome = join(base, 'home');
   const fixtures = join(base, 'fixtures');
   process.env.LPM_NPM_FIXTURES = fixtures;
+  process.env.LPM_NPM_OFFLINE = '1'; // a package without fixtures is simply "not on npm": no network in unit tests
   process.env.DSH_HOME = dshHome;
 
   // fake dsh install, flat layout like `npm install --prefix`

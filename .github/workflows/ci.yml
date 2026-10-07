@@ -1,0 +1,36 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}${{ matrix.experimental && ' (experimental)' || '' }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, node: 26, experimental: false }   # the supported combination
+          - { os: ubuntu-latest, node: 26, experimental: true }
+          - { os: ubuntu-latest, node: 24, experimental: true }
+          - { os: ubuntu-latest, node: 22, experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ matrix.node }}', cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run check:package
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 26 }
+      - run: npm audit --omit=dev      # the plugin has no runtime dependencies
+      - run: npm audit                 # dev tooling (esbuild); informational

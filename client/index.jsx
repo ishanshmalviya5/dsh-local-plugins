@@ -2,7 +2,7 @@
 //   - Settings → "Local Plugins": list, add/migrate, update/conflicts, apply/restore,
 //     commit, rollback, dependency overrides, Reapply all, Restart
 //   - sidebar footer badge: updates + conflicts + restart-needed count
-//   - "Work on it" / "Fix with agent": a new dsh session (standard preset) in the
+//   - "Work on it" / "Fix with agent": a new dsh session (Creator mode, the `cordis` preset) in the
 //     plugin folder with a prefilled, unsent draft
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Modal, Tag } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -13,6 +13,7 @@ const inject = ['slots', 'remote', 'remote.agentPresets'];
 const API = '/local-plugins-api';
 const SECTION_ID = 'local-plugins';
 const SECTION_LABEL = 'Local Plugins';
+const AGENT_PRESET = 'cordis'; // Creator mode
 
 // ---------- data ----------
 
@@ -28,7 +29,10 @@ async function call(action, body = {}, { timeoutMs = 15000 } = {}) {
   });
   let data;
   try { data = await res.json(); } catch { throw new Error(`${action}: HTTP ${res.status}`); }
-  if (!data.ok) throw new Error(data.error ?? `${action} failed`);
+  if (!data.ok) {
+    const e = data.error ?? {};
+    throw Object.assign(new Error(typeof e === 'string' ? e : e.message ?? `${action} failed`), { code: e.code, details: e.details });
+  }
   return data.value;
 }
 
@@ -74,7 +78,9 @@ function attentionCount(s) {
   if (!s) return 0;
   let n = s.restartNeeded ? 1 : 0;
   if (s.upgrade) n++;
-  for (const p of s.plugins) if (p.pending || p.update?.available) n++;
+  for (const p of s.plugins) if (p.pending || p.update?.available || p.disabled || p.status?.id === 'BROKEN') n++;
+  n += (s.notices ?? []).length;
+  if (s.registryError) n++;
   return n;
 }
 
@@ -85,11 +91,16 @@ async function openAgentSession(ctx, { path, text }) {
   const sessions = ctx.get('sessions');
   const ws = await workspaces.create({ path });
   const sid = await sessions.create({ workspaceId: ws.workspaceId });
-  try {
-    const r = await ctx.remote.agentPresets.select(sid, 'standard');
-    if (r && r.ok === false) console.warn('[dsh-local-plugins] preset select refused', r.error);
-  } catch (err) {
-    console.warn('[dsh-local-plugins] preset select failed', err);
+  // Creator mode (the `cordis` preset) is dsh's mode for building and changing plugins, which is what these sessions do.
+  // If this dsh has no such preset, fall back to the everyday one rather than failing to open the session.
+  for (const preset of [AGENT_PRESET, 'standard']) {
+    try {
+      const r = await ctx.remote.agentPresets.select(sid, preset);
+      if (!r || r.ok !== false) break;
+      console.warn(`[dsh-local-plugins] preset "${preset}" refused`, r.error);
+    } catch (err) {
+      console.warn(`[dsh-local-plugins] preset "${preset}" failed`, err);
+    }
   }
   ctx.get('uiWorkspace').openSession(sid);
   ctx.get('conversation').input.for(sessions.scope(sid)).setDraft(text);
@@ -113,6 +124,8 @@ const c = {
   listItem: (active) => ({ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 13, background: active ? 'var(--dsw-specific-sidebar-nav-item-active,#eef2ff)' : 'transparent' }),
 };
 
+const STATUS_TONE = { APPLIED: 'success', CHANGES_PENDING: 'warning', UPDATE_AVAILABLE: 'warning', CONFLICT: 'danger', LINK_LOST: 'warning', REAPPLY_REQUIRED: 'warning', BROKEN: 'danger', DISABLED: 'danger', TRACKED: 'neutral' };
+const CRASH_KINDS = ['crash-revert', 'crash-recovery', 'crash-revert-failed', 'registry-rebuilt'];
 const short = (sha) => (sha ? String(sha).slice(0, 12) : '—');
 
 function tilde(str, home) {
@@ -137,32 +150,166 @@ function useAction(store, setNotice) {
   }, [store, setNotice]);
 }
 
-function OpPanel({ op, lastOp }) {
-  const [open, setOpen] = useState(false);
-  const shown = op ?? (lastOp?.status === 'error' || open ? lastOp : null);
-  const ref = useRef(null);
-  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; });
-  if (!shown && !lastOp) return null;
-  if (!shown) {
-    return h('div', { style: { ...c.muted, marginTop: 10 } },
-      `Last: ${lastOp.kind}${lastOp.target ? ` ${lastOp.target}` : ''} — ${lastOp.status} `,
-      h('button', { style: { border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', textDecoration: 'underline', padding: 0, fontSize: 12 }, onClick: () => setOpen(true) }, 'show log'));
-  }
-  const tone = shown.status === 'error' ? 'error' : shown.status === 'running' ? 'info' : 'info';
-  return h('div', { style: c.banner(tone), 'data-testid': 'lp-op' },
-    h('div', { style: c.row },
-      h('strong', null, shown.status === 'running' ? '⏳ Running: ' : shown.status === 'error' ? '✖ Failed: ' : '✔ Done: '),
-      h('span', null, `${shown.kind}${shown.target ? ` ${shown.target}` : ''}`),
-      !op && h('button', { style: { marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', fontSize: 12 }, onClick: () => setOpen(false) }, 'hide')),
-    shown.error && h('div', { style: { marginTop: 4 } }, shown.error),
-    h('pre', { ref, style: c.pre }, shown.log.slice(-200).join('\n')));
+const EXPECTED_API = 2;
+const fmtBytes = (n) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(2)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(0, Math.round((n || 0) / 1024))} KB`);
+const fmtDur = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+const VERB = { apply: 'Applying', update: 'Updating', 'finish update': 'Finishing the update of', 'abort update': 'Aborting the update of', 'restore original': 'Unlinking', commit: 'Committing', 'dependency override': 'Saving a dependency override for', migrate: 'Migrating', add: 'Adding', check: 'Checking for updates', 'reapply all': 'Reapplying', repair: 'Repairing the installation', delete: 'Deleting', cleanup: 'Cleaning up', trust: 'Changing script permission for', 'startup recovery': 'Checking the installation' };
+const linkButton = { border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', textDecoration: 'underline', padding: 0, fontSize: 12 };
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
 
-function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
+/** Progress, success and failure of the current/last operation, with what to do about it. */
+function OpPanel({ op, lastOp, run, workOn, plugins }) {
+  const [open, setOpen] = useState(false);
+  const [dismissed, setDismissed] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [, tick] = useState(0);
+  const ref = useRef(null);
+  useEffect(() => { if (!op) return undefined; const t = setInterval(() => tick((n) => n + 1), 500); return () => clearInterval(t); }, [op?.id]);
+  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; });
+  const shown = op ?? lastOp;
+  if (!shown || (!op && dismissed === shown.id)) return null;
+  const running = shown.status === 'running';
+  const failed = shown.status === 'error';
+  const label = `${shown.kind}${shown.target ? ` ${shown.target}` : ''}`;
+  const elapsed = running ? Date.now() - shown.startedAt : shown.durationMs ?? 0;
+  const lastLine = shown.log.length ? shown.log[shown.log.length - 1] : '';
+  const plugin = plugins.find((p) => p.name === shown.target);
+  const exists = Boolean(plugin);
+  const pathToCopy = plugin?.pending?.worktree ?? plugin?.repo ?? null;
+  const pathLabel = plugin?.pending ? 'Copy worktree path' : 'Copy repo path';
+  const canRetry = failed && shown.request && !shown.needsTrust && shown.errorCode !== 'BUSY';
+  const logBox = (open || running) && h('pre', { ref, style: c.pre }, shown.log.slice(-200).join('\n'));
+  const logButtons = [
+    h('button', { key: 'v', style: linkButton, onClick: () => setOpen(!open) }, open ? 'Hide logs' : 'View logs'),
+    h('button', { key: 'c', style: linkButton, onClick: async () => { setCopied(await copyText(shown.log.join('\n'))); setTimeout(() => setCopied(false), 1500); } }, copied ? 'Copied' : 'Copy log'),
+  ];
+
+  if (running) {
+    return h('div', { style: c.banner('info'), 'data-testid': 'lp-op' },
+      h('div', { style: c.row }, h('strong', null, `⏳ ${VERB[shown.kind] ?? shown.kind}${shown.target ? ` ${shown.target}` : ''}…`), h('span', { style: c.muted }, fmtDur(elapsed))),
+      lastLine && h('div', { style: { ...c.muted, marginTop: 4 } }, lastLine.slice(0, 160)),
+      logBox);
+  }
+  if (!failed) {
+    return h('div', { style: { ...c.muted, marginTop: 10 }, 'data-testid': 'lp-op' },
+      `✔ ${label} — done in ${fmtDur(elapsed)} · `, logButtons[0], ' · ', logButtons[1], ' · ', h('button', { style: linkButton, onClick: () => setDismissed(shown.id) }, 'dismiss'), logBox);
+  }
+  return h('div', { style: c.banner('error'), 'data-testid': 'lp-op' },
+    h('div', { style: c.row }, h('strong', null, `✖ ${shown.title ?? 'Failed'}`), shown.target && h('span', { style: c.muted }, shown.target), h('button', { style: { ...linkButton, marginLeft: 'auto' }, onClick: () => setDismissed(shown.id) }, 'dismiss')),
+    h('div', { style: { marginTop: 6, whiteSpace: 'pre-wrap' } }, shown.error),
+    shown.advice && h('div', { style: { marginTop: 8 } },
+      h('div', null, h('strong', null, 'Is it safe? '), shown.advice.safe),
+      h('div', { style: { marginTop: 4 } }, h('strong', null, 'What now? '), shown.advice.next)),
+    h('div', { style: { ...c.row, marginTop: 8 } },
+      canRetry && h(Button, { size: 'sm', variant: 'primary', onClick: () => run(shown.request.action, shown.request.body) }, 'Retry'),
+      exists && h(Button, { size: 'sm', variant: 'outline', onClick: () => workOn(shown.target, shown.request?.action === 'finish' ? 'conflict' : 'work') }, 'Work on it'),
+      logButtons[0], logButtons[1],
+      pathToCopy && h('button', { style: linkButton, onClick: async () => { setCopied(await copyText(pathToCopy)); setTimeout(() => setCopied(false), 1500); }, title: pathToCopy, 'data-testid': 'lp-copy-path' }, pathLabel),
+      h('span', { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` · ${shown.errorCode}` : ''}`)),
+    logBox);
+}
+
+/** Recent operations, newest first; click one for its full log. */
+function HistoryPanel({ s }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [sel, setSel] = useState(null);
+  const [full, setFull] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    call('history').then((v) => setRows(v.operations)).catch(() => {});
+  }, [open, s.lastOp?.id, s.op?.id]);
+  useEffect(() => {
+    if (sel == null) { setFull(null); return; }
+    call('op', { id: sel }).then(setFull).catch(() => setFull(null));
+  }, [sel]);
+  return h('div', { style: { marginTop: 10 } },
+    h('button', { style: linkButton, onClick: () => setOpen(!open), 'data-testid': 'lp-history-toggle' }, open ? 'Hide recent operations' : 'Recent operations'),
+    open && h('div', { style: { ...c.list, maxHeight: 200 }, 'data-testid': 'lp-history' },
+      rows.length === 0 ? h('div', { style: { ...c.muted, padding: 10 } }, 'Nothing has run since dsh started.')
+        : rows.map((o) => h('div', { key: o.id, style: c.listItem(sel === o.id), onClick: () => setSel(sel === o.id ? null : o.id) },
+          h('span', null, `${o.status === 'ok' ? '✔' : o.status === 'error' ? '✖' : '⏳'} ${o.kind}${o.target ? ` ${o.target}` : ''}`),
+          h('span', { style: c.muted }, `${fmtDur(o.durationMs ?? 0)}${o.status === 'error' && o.errorCode ? ` · ${o.errorCode}` : ''}`)))),
+    open && full && h('pre', { style: c.pre }, `${full.error ? `${full.error}\n\n` : ''}${full.log.join('\n')}`));
+}
+
+/** Disk use per plugin, computed on demand (it walks the folders), plus a safe snapshot cleanup. */
+function DiskPanel({ busy, run, openModal, settings }) {
+  const [open, setOpen] = useState(false);
+  const [keep, setKeep] = useState(null);
+  const [saved, setSaved] = useState(null);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  async function load() { setErr(null); try { setData(await call('diskUsage', {}, { timeoutMs: 60000 })); } catch (e) { setErr(e.message); } }
+  useEffect(() => { if (open) load(); }, [open]);
+  return h('div', { style: { marginTop: 10 } },
+    h('button', { style: linkButton, onClick: () => setOpen(!open), 'data-testid': 'lp-disk-toggle' }, open ? 'Hide disk usage' : 'Disk usage'),
+    open && h('div', { style: c.card, 'data-testid': 'lp-disk' },
+      err && h('div', { style: { color: 'var(--dsw-alias-state-error-primary,#dc2626)' } }, `Could not measure disk usage: ${err}`),
+      !data && !err && h('div', { style: c.muted }, 'Measuring…'),
+      data && h('div', null,
+        Object.entries(data.plugins).map(([name, u]) => h('div', { key: name, style: { ...c.row, justifyContent: 'space-between', fontSize: 13 } },
+          h('span', null, name),
+          h('span', { style: c.muted }, `repo ${fmtBytes(u.repo)} · ${u.snapshotCount} snapshot(s) ${fmtBytes(u.snapshots)} · worktrees ${fmtBytes(u.worktrees)} · backups ${fmtBytes(u.backups)}`))),
+        h('div', { style: { ...c.row, justifyContent: 'space-between', marginTop: 8, fontSize: 13 } },
+          h('strong', null, `Total ${fmtBytes(data.total)}`), h('span', { style: c.muted }, `trash ${fmtBytes(data.trash)}`)),
+        settings && h('div', { style: { ...c.row, marginTop: 10, fontSize: 13 }, 'data-testid': 'lp-retention' },
+          h('span', null, 'Keep'),
+          h('input', { type: 'number', min: 1, max: 20, style: { ...c.input, width: 64 }, disabled: settings.keepFromEnv, value: keep ?? settings.keepSnapshots, onChange: (e) => { setKeep(e.target.value); setSaved(null); }, 'data-testid': 'lp-keep-input' }),
+          h('span', null, 'deployments per plugin'),
+          h(Button, { size: 'sm', variant: 'outline', disabled: settings.keepFromEnv || keep == null || Number(keep) === settings.keepSnapshots, onClick: async () => { try { await call('setSettings', { keepSnapshots: Number(keep) }); setSaved('Saved'); } catch (e) { setSaved(e.message); } } }, 'Save'),
+          saved && h('span', { style: c.muted }, saved),
+          h('div', { style: { ...c.muted, width: '100%' } }, settings.keepFromEnv ? 'Set by the LPM_KEEP_SNAPSHOTS environment variable, which overrides this.' : 'The live deployment and the one you can roll back to are always kept, whatever this says.')),
+        h('div', { style: { ...c.row, marginTop: 8 } },
+          h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => openModal({ kind: 'cleanup' }) }, 'Clean up old snapshots…'),
+          h(Button, { size: 'sm', variant: 'ghost', onClick: load }, 'Measure again')))));
+}
+
+/** Previews what cleanup would remove (nothing is deleted until you confirm). */
+function CleanupModal({ run, onClose }) {
+  const [plan, setPlan] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { call('cleanupPreview', {}, { timeoutMs: 60000 }).then(setPlan).catch((e) => setErr(e.message)); }, []);
+  const nothing = plan && plan.snapshots.length === 0;
+  return h(Modal, { open: true, onClose, title: 'Clean up old snapshots', closeLabel: 'Close',
+    footer: h('div', { style: c.row },
+      h(Button, { variant: 'ghost', onClick: onClose }, 'Cancel'),
+      h(Button, { variant: 'primary', disabled: !plan || nothing, onClick: () => { run('cleanup', { execute: true }); onClose(); } }, plan && !nothing ? `Remove ${plan.snapshots.length} (${fmtBytes(plan.bytes)})` : 'Remove')) },
+  h('div', { style: { fontSize: 13, lineHeight: 1.6 } },
+    err ? `Could not prepare the preview: ${err}` : !plan ? 'Working out what can be removed…' : nothing ? 'Nothing to clean up: every snapshot is either live, the rollback target, or within the retention limit.'
+      : h('div', null, 'These deployments are older than the retention limit. The live one and the rollback target are never removed, and any of them can be rebuilt from git:',
+        h('ul', { style: { margin: '8px 0 0 18px', padding: 0 } }, plan.snapshots.map((x) => h('li', { key: `${x.kind ?? 'snapshot'}-${x.name}`, style: c.mono }, `${x.kind === 'worktree' ? '(leftover trial merge) ' : ''}${x.name} — ${fmtBytes(x.bytes)}`))))));
+}
+
+/** Typed confirmation: stop tracking a plugin; the repo moves to the trash and can be moved back. */
+function DeleteModal({ plugin, run, onClose }) {
+  const [typed, setTyped] = useState('');
+  return h(Modal, { open: true, onClose, title: `Delete local plugin ${plugin.name}?`, closeLabel: 'Close',
+    footer: h('div', { style: c.row },
+      h(Button, { variant: 'ghost', onClick: onClose }, 'Cancel'),
+      h(Button, { variant: 'primary', disabled: typed !== plugin.name, onClick: () => { run('delete', { name: plugin.name, confirmName: typed }); onClose(); } }, 'Delete')) },
+  h('div', { style: { fontSize: 13, lineHeight: 1.6 } },
+    h('p', { style: { marginTop: 0 } }, 'This stops tracking the plugin. dsh is not affected (it already has the original back).'),
+    h('p', null, 'Your repo, with every commit and stash, is ', h('strong', null, 'moved to the trash folder'), ' (not deleted) and can be moved back; deployment snapshots are removed because they can be rebuilt.'),
+    h('p', null, `Type ${plugin.name} to confirm:`),
+    h('input', { style: { ...c.input, width: '100%' }, value: typed, placeholder: plugin.name, onChange: (e) => setTyped(e.target.value), 'data-testid': 'lp-delete-input' })));
+}
+
+function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, issues }) {
   const stats = p.stats ?? {};
   const state = p.applied ? (p.linkLost ? 'Link lost' : 'Applied') : 'Tracked only';
   const tone = p.applied ? (p.linkLost ? 'warning' : 'success') : 'neutral';
+  const st = p.status;
+  const allows = (a) => !st || st.allowed.includes(a);
+  // a disabled plugin offers only "Work on it" until something new has been committed
+  const fixedSinceCrash = !p.disabled || (stats.head && stats.head !== p.lastCrash?.localHead) || stats.uncommitted > 0;
+  const myIssues = (issues ?? []).filter((i) => i.plugin === p.name && i.severity !== 'info');
   const [agentErr, setAgentErr] = useState(null);
+  // the last operation on this plugin stopped because it needs permission to run scripts
+  const trustAsk = lastOp && lastOp.status === 'error' && lastOp.needsTrust && lastOp.request && lastOp.target === p.name ? lastOp : null;
 
   async function agent(mode) {
     setAgentErr(null);
@@ -179,10 +326,11 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
     h('div', { style: c.row },
       h('strong', { style: { fontSize: 14 } }, p.name),
       h(Tag, { tone: p.kind === 'core' ? 'info' : 'outline' }, p.kind === 'core' ? 'core' : 'third-party'),
-      h(Tag, { tone }, state),
+      h(Tag, { tone: st ? STATUS_TONE[st.id] ?? tone : tone }, st ? st.label : state),
       p.update?.available && !p.pending && h(Tag, { tone: 'warning' }, `Update available ${p.update.target && p.update.target !== 'upstream' ? short(p.update.target) : ''}`),
-      p.pending && h(Tag, { tone: 'danger' }, 'Conflict')),
-    h('div', { style: { ...c.muted, marginTop: 4 } }, p.source.type === 'git' ? `git · ${tilde(p.source.url, homePath)}` : `npm · ${p.source.name}`),
+      p.pending && h(Tag, { tone: 'danger' }, 'Conflict'),
+      p.trustScripts && h(Tag, { tone: 'warning' }, 'Scripts always allowed')),
+    h('div', { style: { ...c.muted, marginTop: 4 } }, h('button', { style: { ...linkButton, float: 'right' }, onClick: () => copyText(p.pending?.worktree ?? p.repo), title: p.pending?.worktree ?? p.repo, 'data-testid': `lp-path-${p.name}` }, p.pending ? 'Copy worktree path' : 'Copy repo path'), p.source.type === 'git' ? `git · ${tilde(p.source.url, homePath)}` : `npm · ${p.source.name}`),
     h('div', { style: { fontSize: 12, marginTop: 6, lineHeight: 1.6 } },
       h('span', { 'data-testid': 'lp-changed' }, `${stats.changedVsOriginal ?? '?'} file(s) changed vs original`),
       stats.uncommitted ? h('span', null, ` · ${stats.uncommitted} uncommitted`) : null,
@@ -202,14 +350,31 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
         h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => agent('conflict') }, 'Fix with agent'),
         h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'confirm', title: `Abort the update of ${p.name}?`, body: 'The merge attempt is thrown away. Your local branch and the live plugin stay as they are.', action: () => run('abort', { name: p.name }) }) }, 'Abort'))),
 
+    p.disabled && h('div', { style: c.banner('error'), 'data-testid': 'lp-disabled' },
+      h('strong', null, 'Disabled — it crashed dsh. '), 'It was taken out of dsh so dsh can start. Your repo and commits are untouched. Use "Work on it" to fix it with an agent, commit the fix, then Apply becomes available.'),
+
+    myIssues.length > 0 && h('div', { style: c.banner(myIssues.some((i) => i.severity === 'error') ? 'error' : 'warn'), 'data-testid': 'lp-issues' },
+      h('div', null, myIssues.map((i) => h('div', { key: i.code }, `• ${i.message}`))),
+      h('div', { style: { marginTop: 6 } }, h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run('repair', {}) }, 'Repair installation'))),
+
+    trustAsk && h('div', { style: c.banner('error'), 'data-testid': 'lp-trust' },
+      h('div', null, h('strong', null, 'Permission needed. '), `${p.name} wants to run scripts on your computer, with your full access:`),
+      h('ul', { style: { margin: '6px 0 6px 18px', padding: 0, fontSize: 12 } }, trustAsk.needsTrust.map((r) => h('li', { key: r }, r))),
+      h('div', { style: c.muted }, 'Only continue if you trust this plugin and its publisher. Nothing has gone live yet.'),
+      h('div', { style: { ...c.row, marginTop: 8 } },
+        h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, allowScripts: true }) }, 'Allow this time'),
+        h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, alwaysAllow: true }) }, 'Always allow for this plugin'))),
+
     h('div', { style: { ...c.row, marginTop: 10 } },
-      h(Button, { size: 'sm', variant: 'primary', disabled: busy || Boolean(p.pending), onClick: () => run('apply', { name: p.name }) }, p.applied ? 'Apply latest commit' : 'Apply'),
-      p.update?.available && !p.pending && h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run('update', { name: p.name }) }, 'Update'),
-      p.applied && h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => openModal({ kind: 'confirm', title: `Restore the original ${p.name}?`, body: p.kind === 'core' ? 'dsh goes back to the built-in package that shipped with it. Your local repo stays tracked — click Apply to switch back.' : "dsh installs the original's latest release. Your local repo stays tracked — click Apply to switch back.", action: () => run('restore', { name: p.name }) }) }, 'Restore original'),
-      h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'commit', plugin: p }) }, 'Commit'),
-      h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'rollback', plugin: p }) }, 'Deploy older commit…'),
-      h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'deps', plugin: p }) }, 'Dependency overrides'),
-      h(Button, { size: 'sm', variant: 'ghost', onClick: () => agent('work') }, 'Work on it')),
+      allows('apply') && fixedSinceCrash && h(Button, { size: 'sm', variant: st?.primary === 'apply' || !st ? 'primary' : 'outline', disabled: busy || Boolean(p.pending), onClick: () => (p.kind === 'core' && !p.applied ? openModal({ kind: 'confirm', title: `Replace the built-in ${p.name}?`, body: 'This changes a package inside your dsh installation: the original folder is moved to a backup and replaced by a link to your version. "Unlink" puts the original back, and if dsh crashes after this the original is restored automatically. Continue?', action: () => run('apply', { name: p.name }) }) : run('apply', { name: p.name })) }, p.applied ? 'Apply latest commit' : 'Apply'),
+      p.update?.available && allows('update') && h(Button, { size: 'sm', variant: st?.primary === 'update' ? 'primary' : 'outline', disabled: busy, onClick: () => run('update', { name: p.name }) }, 'Update'),
+      p.applied && allows('restore') && h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => openModal({ kind: 'confirm', title: `Unlink ${p.name} and restore the original?`, body: p.kind === 'core' ? 'dsh goes back to the built-in package that shipped with it. Your local repo stays tracked — click Apply to switch back.' : "dsh reinstalls the original version spec it had before (for example ^1.0.0). Your local repo stays tracked — click Apply to switch back.", action: () => run('restore', { name: p.name }) }) }, 'Unlink (restore original)'),
+      allows('delete') && !p.applied && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'delete', plugin: p }), 'data-testid': `lp-delete-${p.name}` }, 'Delete…'),
+      allows('commit') && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'commit', plugin: p }) }, 'Commit'),
+      allows('rollback') && !p.disabled && h(Button, { size: 'sm', variant: st?.primary === 'rollback' ? 'outline' : 'ghost', disabled: busy, onClick: () => openModal({ kind: 'rollback', plugin: p }) }, 'Deploy older commit…'),
+      allows('setDep') && !p.disabled && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'deps', plugin: p }) }, 'Dependency overrides'),
+      p.trustScripts && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run('trust', { name: p.name, trust: false }) }, 'Revoke script permission'),
+      h(Button, { size: 'sm', variant: p.disabled ? 'primary' : 'ghost', onClick: () => agent(p.disabled ? 'crash' : 'work') }, 'Work on it')),
     agentErr && h('div', { style: { ...c.muted, color: 'var(--dsw-alias-state-error-primary,#dc2626)', marginTop: 6 } }, `Could not open agent session: ${agentErr}`));
 }
 
@@ -309,6 +474,17 @@ function LocalPluginsSection({ store, ctx, close }) {
   const run = useAction(store, setNotice);
   const busy = Boolean(s?.op);
 
+  /** Open a dsh agent session in the plugin's repo (or its update worktree) with a prefilled, unsent prompt. */
+  async function workOn(name, mode = 'work') {
+    try {
+      const draft = await call('agentDraft', { name, mode });
+      close?.();
+      await openAgentSession(ctx, draft);
+    } catch (err) {
+      setNotice({ tone: 'error', text: `Could not open an agent session: ${err.message}` });
+    }
+  }
+
   async function restart() {
     setRestarting(true);
     try {
@@ -344,14 +520,20 @@ function LocalPluginsSection({ store, ctx, close }) {
       : modal.kind === 'commit' ? h(CommitModal, { plugin: modal.plugin, onClose: () => setModal(null), run })
         : modal.kind === 'rollback' ? h(RollbackModal, { plugin: modal.plugin, onClose: () => setModal(null), run })
           : modal.kind === 'deps' ? h(DepsModal, { plugin: modal.plugin, onClose: () => setModal(null), run })
+            : modal.kind === 'delete' ? h(DeleteModal, { plugin: modal.plugin, onClose: () => setModal(null), run })
+              : modal.kind === 'cleanup' ? h(CleanupModal, { onClose: () => setModal(null), run })
             : h(ConfirmModal, { ...modal, onClose: () => setModal(null) });
 
   return h('div', { 'data-testid': 'lp-section', style: { maxWidth: 720 } },
+    s.apiVersion !== EXPECTED_API && h('div', { style: c.banner('error'), 'data-testid': 'lp-version' },
+      h('strong', null, 'This page is out of date. '), `It speaks API ${EXPECTED_API} but the server speaks ${s.apiVersion ?? 'an older version'}. Reload the page.`,
+      h('div', { style: { marginTop: 8 } }, h(Button, { size: 'sm', variant: 'primary', onClick: () => location.reload() }, 'Reload'))),
     h('div', { style: { ...c.row, justifyContent: 'space-between' } },
       h('div', null,
         h('div', { style: { fontSize: 16, fontWeight: 500 } }, 'Local Plugins'),
         h('div', { style: c.muted }, `Edited plugins kept as git repos in ${tilde(s.env.root, homePath)}. dsh only runs committed code — Apply deploys a commit.`)),
       h('div', { style: c.row },
+        h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run('repair', {}), title: 'Finish or roll back interrupted operations and make the registry match what is on disk' }, 'Repair installation'),
         h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run('check', {}) }, 'Check now'),
         h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => setModal({ kind: 'add' }) }, '+ Add'))),
 
@@ -367,18 +549,61 @@ function LocalPluginsSection({ store, ctx, close }) {
     notice && h('div', { style: c.banner(notice.tone === 'error' ? 'error' : 'info') },
       notice.text, ' ', h('button', { style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, color: 'inherit' }, onClick: () => setNotice(null) }, '✕')),
 
-    h(OpPanel, { op: s.op, lastOp: s.lastOp }),
+    s.registryError && h('div', { style: c.banner('error'), 'data-testid': 'lp-registry-error' },
+      h('strong', null, 'The plugin registry cannot be read. '), s.registryError.message,
+      s.registryError.code !== 'REGISTRY_TOO_NEW' && h('div', { style: { marginTop: 8 } }, h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => run('repair', {}) }, 'Repair installation'))),
+
+    (s.notices ?? []).map((n) => h('div', { key: n.id, style: c.banner(n.kind === 'info' ? 'info' : n.kind === 'crash-recovery' ? 'warn' : 'error'), 'data-testid': 'lp-notice' },
+      h('div', null, h('strong', null, n.title)),
+      h('div', { style: { marginTop: 4, fontSize: 12, lineHeight: 1.5 } }, n.message),
+      h('div', { style: { ...c.row, marginTop: 6 } },
+        h(Button, { size: 'sm', variant: 'outline', onClick: async () => { await call('dismissNotice', { id: n.id }).catch(() => {}); store.refresh(); } }, 'Dismiss')))),
+
+    h(OpPanel, { op: s.op, lastOp: s.lastOp, run, workOn, plugins: s.plugins }),
+    h(HistoryPanel, { s }),
+    h(DiskPanel, { busy, run, openModal: setModal, settings: s.effectiveSettings }),
+
+    Object.keys(s.quarantine ?? {}).length > 0 && h('div', { style: c.banner('warn'), 'data-testid': 'lp-quarantine' },
+      h('strong', null, 'Some registry entries were set aside (kept, not used): '),
+      Object.entries(s.quarantine).map(([n, q]) => h('div', { key: n, style: { marginTop: 4 } }, `• ${n} — ${q.problems.join('; ')}`)),
+      h('div', { style: c.muted }, 'Nothing was deleted. "Repair installation" rebuilds missing entries from your repos.')),
 
     s.plugins.length === 0
       ? h('div', { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.')
-      : s.plugins.map((p) => h(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath })),
+      : s.plugins.map((p) => h(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp, issues: s.issues })),
     modalEl);
 }
 
-function SidebarBadge({ store, wide }) {
+function NoticePopup({ store, ctx, notice, onDone }) {
+  const [busy, setBusy] = useState(false);
+  async function dismiss() {
+    setBusy(true);
+    await call('dismissNotice', { id: notice.id }).catch(() => {});
+    store.refresh();
+    onDone();
+  }
+  async function work() {
+    setBusy(true);
+    try {
+      const draft = await call('agentDraft', { name: notice.plugin, mode: 'crash' });
+      await dismiss();
+      await openAgentSession(ctx, draft);
+    } catch { setBusy(false); }
+  }
+  return h(Modal, { open: true, onClose: dismiss, title: notice.title, closeLabel: 'Close',
+    footer: h('div', { style: c.row },
+      h(Button, { variant: 'ghost', disabled: busy, onClick: dismiss }, 'OK'),
+      notice.plugin && ['crash-revert', 'crash-recovery'].includes(notice.kind) && h(Button, { variant: 'primary', disabled: busy, onClick: work }, 'Work on it')) },
+  h('div', { style: { fontSize: 13, lineHeight: 1.6 }, 'data-testid': 'lp-popup' }, notice.message));
+}
+
+function SidebarBadge({ store, wide, ctx }) {
   const { snapshot } = useStore(store);
+  const [seen, setSeen] = useState(() => new Set());
+  const popup = (snapshot?.notices ?? []).find((n) => CRASH_KINDS.includes(n.kind) && !seen.has(n.id));
+  const popupEl = popup ? h(NoticePopup, { key: popup.id, store, ctx, notice: popup, onDone: () => setSeen((x) => new Set(x).add(popup.id)) }) : null;
   const n = attentionCount(snapshot);
-  if (!n) return null;
+  if (!n) return popupEl;
   // Settings exposes no "open section" API to plugins, and the `settings.open`
   // shortcut is ignored when invoked from a plugin, so drive the shell's own
   // controls: the sidebar Settings trigger, then our nav entry.
@@ -396,7 +621,7 @@ function SidebarBadge({ store, wide }) {
     title: `${n} local plugin item(s) need attention`,
     onClick: open,
     style: { display: 'flex', alignItems: 'center', gap: 6, width: wide ? '100%' : 36, height: 32, border: 'none', background: 'none', cursor: 'pointer', padding: wide ? '0 8px' : 0, justifyContent: wide ? 'flex-start' : 'center', color: 'var(--dsw-alias-label-primary,inherit)', fontSize: 13, borderRadius: 8 },
-  }, h(Tag, { tone: 'warning' }, String(n)), wide ? 'Local plugins' : null);
+  }, h(Tag, { tone: 'warning' }, String(n)), wide ? 'Local plugins' : null, popupEl);
 }
 
 export function apply(ctx) {

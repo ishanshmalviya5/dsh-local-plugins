@@ -1,0 +1,22 @@
+name: Release check
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 26, cache: npm }
+      - run: npm ci
+      - name: Tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: npm run check
+      - name: Pack
+        run: npm pack
+      - uses: actions/upload-artifact@v4
+        with: { name: package, path: '*.tgz' }
+      # Publishing is deliberately a manual step: download the artifact, inspect it, then `npm publish` it yourself.

@@ -1,2 +1,10 @@
 node_modules/
 test/e2e/.tmp/
+/dsh-local-plugins-public/
+/RELEASE-HANDOFF.md
+.playwright-mcp/
+*.tgz
+test/e2e/REPORT.md
+test/e2e/api-results.json
+test/e2e/screenshots/
+docs/conversation/
