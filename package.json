@@ -1,6 +1,6 @@
 {
   "name": "dsh-local-plugins",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Keep locally-edited dsh plugins (third-party and core) as git repos, deploy exact commits atomically, recover from crashes, and update them from their origin.",
   "license": "MIT",
   "keywords": [
