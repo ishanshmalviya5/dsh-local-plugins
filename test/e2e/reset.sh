@@ -9,6 +9,12 @@ DSH="$T/npm/node_modules/.bin/dsh"
 
 pids="$(lsof -ti tcp:3091 -sTCP:LISTEN || true)"
 if [ -n "$pids" ]; then kill $pids; sleep 2; fi
+# A previous run may have left built-in packages in the test dsh install as symlinks into the home we are about to
+# wipe (their backups live there too). Put the install back first, or the next run starts from a broken dsh.
+if [ -d "$T/npm/node_modules/@deepseek-ai" ]; then
+  find "$T/npm/node_modules/@deepseek-ai" -maxdepth 1 -type l -exec rm {} +
+  ( cd "$T/npm" && npm install --no-fund --no-audit --prefer-offline --loglevel=error >/dev/null )
+fi
 rm -rf "$T/home" "$T/fixtures" "$T/dsh-web.log"
 mkdir -p "$T/home" "$T/fixtures"
 
