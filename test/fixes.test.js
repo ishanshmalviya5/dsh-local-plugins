@@ -235,3 +235,22 @@ test('Restore original reinstalls exactly the original spec (range, pin, tag, gi
   assert.equal(pkg.dependencies['lpm-npm'], '1.0.0');
   assert.equal(r.plugins['lpm-npm'], undefined);
 });
+
+test('load check: ESM, CommonJS, shebang files and duplicate declarations are judged correctly, in one pass', async () => {
+  const { checkSnapshotLoads } = await import('../lib/deploy.js');
+  const { mkdtempSync, mkdirSync: mk, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'lpm-lc-'));
+  const put = (f, src) => { mk(join(dir, f, '..'), { recursive: true }); wf(join(dir, f), src); };
+  put('package.json', JSON.stringify({ name: 'x', version: '1.0.0', type: 'module', main: 'index.js' }));
+  put('index.js', "import fs from 'node:fs';\nexport const a = await Promise.resolve(1);\nexport default fs;\n");   // ESM + top-level await
+  put('lib/legacy.cjs', "const x = require('node:path');\nmodule.exports = { x };\nreturn;\n");                      // CJS allows top-level return
+  put('bin/tool.js', "#!/usr/bin/env node\nexport const t = 1;\n");                                                    // shebang
+  put('lib/mixed.js', "module.exports = 1;\n");                                                                        // CJS inside a type:module package: Node's detection accepts it
+  await checkSnapshotLoads(dir);                                                                                       // all fine
+  put('lib/dup.js', 'export const a = 1;\nexport const a = 2;\n');
+  put('lib/broken.cjs', 'const = ;\n');
+  put('lib/unclosed.mjs', 'export function f( {\n');
+  await assert.rejects(checkSnapshotLoads(dir), (e) => /3 file\(s\) do not parse/.test(e.message) && /dup\.js: SyntaxError/.test(e.message) && /broken\.cjs/.test(e.message) && /unclosed\.mjs/.test(e.message));
+  rm(dir, { recursive: true, force: true });
+});
