@@ -219,3 +219,99 @@ test('an unfinished snapshot is swept, but a live one is only reported', async (
   assert.ok(existsSync(live), 'live snapshot is never deleted');
   assert.ok(r.issues.some((i) => i.code === 'SNAPSHOT_UNFINISHED' && i.plugin === 'lpm-npm'));
 });
+
+// ---------- rollback, retention, reconciliation ----------
+
+async function threeDeploys() {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  const shas = [];
+  for (const t of ['A', 'B', 'C']) {
+    await newCommit('lpm-npm', t);
+    await w.mgr.apply({ name: 'lpm-npm' }, w.log);
+    shas.push(snapshotSha(liveSnap('lpm-npm')));
+  }
+  return shas;
+}
+const liveText = (n = 'lpm-npm') => readFileSync(join(liveSnap(n), 'index.js'), 'utf8');
+
+test('rollback: A -> B -> C, back to A, then forward to C again; repeating is safe', async () => {
+  const [A, B, C] = await threeDeploys();
+  await w.mgr.apply({ name: 'lpm-npm', ref: A }, w.log);
+  assert.match(liveText(), /"A"/);
+  assert.equal(reg().plugins['lpm-npm'].deployedSha, A);
+  await w.mgr.apply({ name: 'lpm-npm', ref: A }, w.log);       // repeat: no harm
+  assert.match(liveText(), /"A"/);
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);                // forward to the newest commit again
+  assert.equal(snapshotSha(liveSnap('lpm-npm')), C);
+  await w.mgr.apply({ name: 'lpm-npm', ref: B }, w.log);
+  assert.match(liveText(), /"B"/);
+  assert.deepEqual(reg().plugins['lpm-npm'].deployHistory.slice(0, 2), [B, C]);
+  assertHealthy('lpm-npm', { expectSha: B });
+  // git state is untouched by rollbacks
+  assert.match((await import('../test/helpers.js')).g(repoOf('lpm-npm'), 'log', '-1', '--format=%s', 'local'), /C/);
+});
+
+test('rollback to an unknown commit fails cleanly and keeps the current deployment', async () => {
+  const [, , C] = await threeDeploys();
+  await assert.rejects(w.mgr.apply({ name: 'lpm-npm', ref: 'deadbeefdeadbeef' }, w.log), /unknown commit/);
+  assert.equal(snapshotSha(liveSnap('lpm-npm')), C);
+  assertHealthy('lpm-npm', { expectSha: C });
+});
+
+test('retention is configurable; the live snapshot and the rollback target are never pruned', async () => {
+  process.env.LPM_KEEP_SNAPSHOTS = '2';
+  const [A, B, C] = await threeDeploys();
+  const have = () => readdirSync(w.env.deployedDir).filter((n) => n.startsWith('lpm-npm@')).map((n) => n.slice('lpm-npm@'.length)).sort();
+  assert.deepEqual(have(), [B, C].map((s) => s.slice(0, 12)).sort(), 'A pruned; live C and rollback target B kept');
+  await w.mgr.apply({ name: 'lpm-npm', ref: B }, w.log);        // rollback to the kept one: instant, no rebuild
+  assert.match(liveText(), /"B"/);
+  await w.mgr.apply({ name: 'lpm-npm', ref: A }, w.log);        // a pruned one is rebuilt from git
+  assert.match(liveText(), /"A"/);
+  assert.ok(have().includes(A.slice(0, 12)));
+});
+
+test('a snapshot deleted by hand is detected and a rollback to it rebuilds it', async () => {
+  const [A, B, C] = await threeDeploys();
+  const bDir = join(w.env.deployedDir, `lpm-npm@${B.slice(0, 12)}`);
+  rmSync(bDir, { recursive: true, force: true });
+  await w.mgr.apply({ name: 'lpm-npm', ref: B }, w.log);
+  assert.match(liveText(), /"B"/);
+  assert.ok(snapshotSha(bDir));
+  // deleting the LIVE snapshot is reported, not silently ignored
+  rmSync(liveSnap('lpm-npm'), { recursive: true, force: true });
+  const issues = await reconcile(w.env, reg());
+  assert.ok(issues.some((i) => i.code === 'STABLE_DANGLING'));
+  void A; void C;
+});
+
+test('reconcile fixes what is safe: registry out of date, stable link missing but snapshot present', async () => {
+  const [, , C] = await threeDeploys();
+  const r = reg();
+  r.plugins['lpm-npm'].deployedSha = 'f'.repeat(40);           // registry disagrees with the live snapshot
+  saveRegistry(w.env.registryFile, r);
+  let res = await w.mgr.repair(w.log);
+  assert.ok(res.issues.some((i) => i.code === 'SHA_MISMATCH' && i.fixed));
+  assert.equal(reg().plugins['lpm-npm'].deployedSha, C);
+
+  rmSync(stable('lpm-npm'), { force: true });                   // stable link vanished, snapshot still there
+  res = await w.mgr.repair(w.log);
+  assert.ok(res.issues.some((i) => i.code === 'STABLE_MISSING' && i.fixed));
+  assert.equal(snapshotSha(liveSnap('lpm-npm')), C);
+  assert.deepEqual((await w.mgr.repair(w.log)).issues.filter((i) => i.severity !== 'info'), [], 'a second repair finds nothing: idempotent');
+});
+
+test('a corrupt registry is kept aside and rebuilt from the repos; nothing is applied by guesswork', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await w.mgr.migrate({ name: CORE }, w.log);
+  writeFileSync(w.env.registryFile, '{ definitely not json');
+  const r = await w.mgr.repair(w.log);
+  assert.ok(r.issues !== undefined);
+  const rebuilt = reg();
+  assert.deepEqual(Object.keys(rebuilt.plugins).sort(), [CORE, 'lpm-npm'].sort());
+  assert.equal(rebuilt.plugins['lpm-npm'].applied, false);
+  assert.equal(rebuilt.plugins[CORE].kind, 'core');
+  assert.ok(readdirSync(w.env.root).some((n) => n.startsWith('registry.json.corrupt-')), 'broken file kept');
+  assert.ok(rebuilt.notices.some((n) => n.kind === 'registry-rebuilt'));
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);               // and it is usable again
+  assert.equal(reg().plugins['lpm-npm'].applied, true);
+});
