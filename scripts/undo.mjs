@@ -22,6 +22,8 @@ const flag = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i
 const has = (n) => argv.includes(n);
 const names = argv.filter((a, i) => !a.startsWith('--') && !['--profile', '--home', '--dsh-root'].includes(argv[i - 1]));
 
+const { assertSupportedPlatform } = await import(pathToFileURL(join(root, 'lib/platform.js')).href);
+try { assertSupportedPlatform(); } catch (err) { console.error(err.message); process.exit(1); }
 const { createEnv, detectDshInstall } = await import(pathToFileURL(join(root, 'lib/env.js')).href);
 const { createManager } = await import(pathToFileURL(join(root, 'lib/actions.js')).href);
 const { loadRegistry } = await import(pathToFileURL(join(root, 'lib/registry.js')).href);
