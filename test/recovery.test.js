@@ -49,7 +49,7 @@ async function profileWorld() {
   return { oldSha, newSha: await newSha };
 }
 
-for (const stage of ['prepare', 'install', 'activate', 'registry', 'cleanup']) {
+for (const stage of ['prepare', 'install', 'snapshot', 'prepared', 'activate', 'activated', 'linking', 'linked', 'registry', 'cleanup']) {
   for (const mode of ['fail', 'crash']) {
     test(`profile apply: ${mode} at "${stage}" leaves the old or the new deployment, never a broken one`, async () => {
       const { oldSha, newSha } = await profileWorld();
@@ -65,7 +65,7 @@ for (const stage of ['prepare', 'install', 'activate', 'registry', 'cleanup']) {
       const sha = snapshotSha(liveSnap('lpm-npm'));
       assert.ok(sha === oldSha || sha === newSha, `live is old or new, got ${sha}`);
       // before activation the old deployment must still be live
-      if (['prepare', 'install', 'activate'].includes(stage)) assert.equal(sha, oldSha);
+      if (['prepare', 'install', 'snapshot', 'prepared', 'activate'].includes(stage)) assert.equal(sha, oldSha);
       assertHealthy('lpm-npm');
 
       // and the system is usable afterwards: a normal apply reaches the new commit
@@ -339,4 +339,58 @@ test('the startup sweep never deletes a snapshot that is linked, or one that bel
   assert.ok(existsSync(stray), 'a directory that belongs to no tracked plugin is left alone');
   assert.ok(!existsSync(junkDir), 'an unfinished, unlinked snapshot of a tracked plugin is cleaned up');
   assert.ok(r.swept.some((x) => /ffffffffffff/.test(x)));
+});
+
+test('Repair puts a vanished built-in package back from its backup (dsh cannot load a package that is not there)', async () => {
+  await w.mgr.migrate({ name: CORE }, w.log);
+  const original = readFileSync(join(corePath(), 'lib/index.js'), 'utf8');
+  await w.mgr.apply({ name: CORE }, w.log);
+  rmSync(corePath(), { force: true, recursive: true });                 // e.g. a dsh reinstall removed the folder
+  assert.ok(!existsSync(corePath()));
+  const state = await w.mgr.state(null);                                // reading never repairs, it only reports
+  assert.ok(state.issues.some((i) => i.code === 'CORE_MISSING' && i.severity === 'error' && /Run Repair installation/.test(i.message)));
+  assert.ok(!existsSync(corePath()));
+  const r = await w.mgr.repair(w.log);
+  assert.ok(r.issues.some((i) => i.code === 'CORE_MISSING' && i.fixed));
+  assert.equal(readFileSync(join(corePath(), 'lib/index.js'), 'utf8'), original, 'the original package is back');
+  assert.equal(reg().plugins[CORE].applied, false);
+  assert.deepEqual((await w.mgr.repair(w.log)).issues.filter((i) => i.severity !== 'info'), [], 'and a second repair finds nothing');
+});
+
+test('a vanished built-in package with no backup is reported, never invented', async () => {
+  await w.mgr.migrate({ name: CORE }, w.log);
+  await w.mgr.apply({ name: CORE }, w.log);
+  const backup = reg().plugins[CORE].core.backup;
+  rmSync(corePath(), { force: true, recursive: true });
+  rmSync(backup, { recursive: true, force: true });
+  const r = await w.mgr.repair(w.log);
+  const issue = r.issues.find((i) => i.code === 'CORE_MISSING');
+  assert.ok(issue && !issue.fixed && /No backup was found: reinstall dsh/.test(issue.message));
+  assert.ok(!existsSync(corePath()));
+});
+
+test('restore: crash after the original is back but before the registry is saved ("restored")', async () => {
+  await w.mgr.migrate({ name: CORE }, w.log);
+  const original = readFileSync(join(corePath(), 'lib/index.js'), 'utf8');
+  await w.mgr.apply({ name: CORE }, w.log);
+  process.env.LPM_FAIL_AT = 'restored:crash';
+  await assert.rejects(w.mgr.restore({ name: CORE }, w.log), /injected crash/);
+  delete process.env.LPM_FAIL_AT;
+  assert.equal(readFileSync(join(corePath(), 'lib/index.js'), 'utf8'), original, 'the original is already back on disk');
+  assert.equal(reg().plugins[CORE].applied, true, 'but the registry still says applied');
+  await w.mgr.repair(w.log);
+  assert.equal(reg().plugins[CORE].applied, false, 'repair makes the registry follow the facts');
+  assert.deepEqual(listTxns(w.env), []);
+});
+
+test('delete: crash after the snapshots are removed but before the move ("snapshots") leaves the plugin intact and applicable', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await newCommit('lpm-npm');
+  process.env.LPM_FAIL_AT = 'snapshots:crash';
+  await assert.rejects(w.mgr.deletePlugin({ name: 'lpm-npm', confirmName: 'lpm-npm' }, w.log), /injected crash/);
+  delete process.env.LPM_FAIL_AT;
+  await w.mgr.repair(w.log);
+  assert.ok(reg().plugins['lpm-npm'] && existsSync(repoOf('lpm-npm')));
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);                       // snapshots are rebuilt on demand
+  assertHealthy('lpm-npm');
 });

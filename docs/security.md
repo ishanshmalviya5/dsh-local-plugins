@@ -44,4 +44,4 @@ Every line a child process prints, every operation error, every URL shown in the
 * "Allow" means *trust the code*: scripts run with your privileges. The publisher binding limits silent takeover; it cannot judge intent.
 * The load check proves files parse and entries exist; it does not execute the plugin.
 * A plugin that crashes dsh before this manager loads cannot be reverted automatically — use `scripts/undo.mjs` from a terminal.
-* Windows is not supported (symlinks, rsync).
+* Windows is not supported (symlinks, POSIX permissions); the plugin refuses to start there.
