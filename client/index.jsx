@@ -158,11 +158,13 @@ function OpPanel({ op, lastOp }) {
     h('pre', { ref, style: c.pre }, shown.log.slice(-200).join('\n')));
 }
 
-function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
+function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
   const stats = p.stats ?? {};
   const state = p.applied ? (p.linkLost ? 'Link lost' : 'Applied') : 'Tracked only';
   const tone = p.applied ? (p.linkLost ? 'warning' : 'success') : 'neutral';
   const [agentErr, setAgentErr] = useState(null);
+  // the last operation on this plugin stopped because it needs permission to run scripts
+  const trustAsk = lastOp && lastOp.status === 'error' && lastOp.needsTrust && lastOp.request && lastOp.target === p.name ? lastOp : null;
 
   async function agent(mode) {
     setAgentErr(null);
@@ -181,7 +183,8 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
       h(Tag, { tone: p.kind === 'core' ? 'info' : 'outline' }, p.kind === 'core' ? 'core' : 'third-party'),
       h(Tag, { tone }, state),
       p.update?.available && !p.pending && h(Tag, { tone: 'warning' }, `Update available ${p.update.target && p.update.target !== 'upstream' ? short(p.update.target) : ''}`),
-      p.pending && h(Tag, { tone: 'danger' }, 'Conflict')),
+      p.pending && h(Tag, { tone: 'danger' }, 'Conflict'),
+      p.trustScripts && h(Tag, { tone: 'warning' }, 'Scripts always allowed')),
     h('div', { style: { ...c.muted, marginTop: 4 } }, p.source.type === 'git' ? `git · ${tilde(p.source.url, homePath)}` : `npm · ${p.source.name}`),
     h('div', { style: { fontSize: 12, marginTop: 6, lineHeight: 1.6 } },
       h('span', { 'data-testid': 'lp-changed' }, `${stats.changedVsOriginal ?? '?'} file(s) changed vs original`),
@@ -202,6 +205,14 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
         h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => agent('conflict') }, 'Fix with agent'),
         h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'confirm', title: `Abort the update of ${p.name}?`, body: 'The merge attempt is thrown away. Your local branch and the live plugin stay as they are.', action: () => run('abort', { name: p.name }) }) }, 'Abort'))),
 
+    trustAsk && h('div', { style: c.banner('error'), 'data-testid': 'lp-trust' },
+      h('div', null, h('strong', null, 'Permission needed. '), `${p.name} wants to run scripts on your computer, with your full access:`),
+      h('ul', { style: { margin: '6px 0 6px 18px', padding: 0, fontSize: 12 } }, trustAsk.needsTrust.map((r) => h('li', { key: r }, r))),
+      h('div', { style: c.muted }, 'Only continue if you trust this plugin and its publisher. Nothing has gone live yet.'),
+      h('div', { style: { ...c.row, marginTop: 8 } },
+        h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, allowScripts: true }) }, 'Allow this time'),
+        h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, alwaysAllow: true }) }, 'Always allow for this plugin'))),
+
     h('div', { style: { ...c.row, marginTop: 10 } },
       h(Button, { size: 'sm', variant: 'primary', disabled: busy || Boolean(p.pending), onClick: () => run('apply', { name: p.name }) }, p.applied ? 'Apply latest commit' : 'Apply'),
       p.update?.available && !p.pending && h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => run('update', { name: p.name }) }, 'Update'),
@@ -209,6 +220,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
       h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'commit', plugin: p }) }, 'Commit'),
       h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'rollback', plugin: p }) }, 'Deploy older commit…'),
       h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'deps', plugin: p }) }, 'Dependency overrides'),
+      p.trustScripts && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run('trust', { name: p.name, trust: false }) }, 'Revoke script permission'),
       h(Button, { size: 'sm', variant: 'ghost', onClick: () => agent('work') }, 'Work on it')),
     agentErr && h('div', { style: { ...c.muted, color: 'var(--dsw-alias-state-error-primary,#dc2626)', marginTop: 6 } }, `Could not open agent session: ${agentErr}`));
 }
@@ -371,7 +383,7 @@ function LocalPluginsSection({ store, ctx, close }) {
 
     s.plugins.length === 0
       ? h('div', { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.')
-      : s.plugins.map((p) => h(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath })),
+      : s.plugins.map((p) => h(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp })),
     modalEl);
 }
 

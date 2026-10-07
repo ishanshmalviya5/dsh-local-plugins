@@ -18,7 +18,7 @@ const snaps = (name) => w.env.stableLink(name);
 test('an unfinished snapshot is thrown away and rebuilt, not reused', async () => {
   const origin = makeGitOrigin(w.base, 'lpm-git');
   await w.mgr.addNew({ input: origin.url }, w.log);
-  await w.mgr.apply({ name: 'lpm-git' }, w.log);
+  await w.mgr.apply({ name: 'lpm-git', allowScripts: true }, w.log);
   const sha = reg().plugins['lpm-git'].deployedSha;
   const snap = join(w.env.deployedDir, `lpm-git@${sha.slice(0, 12)}`);
   assert.ok(existsSync(join(snap, '.lpm-ready')), 'finished snapshots carry the ready marker');
@@ -29,7 +29,7 @@ test('an unfinished snapshot is thrown away and rebuilt, not reused', async () =
   rmSync(join(snap, '.lpm-ready'));
   rmSync(join(snap, 'built.txt'));
   w.logs.length = 0;
-  await w.mgr.apply({ name: 'lpm-git' }, w.log);
+  await w.mgr.apply({ name: 'lpm-git', allowScripts: true }, w.log);
   assert.ok(w.logs.some((l) => /unfinished — rebuilding/.test(l)), w.logs.join('\n'));
   assert.ok(existsSync(join(snap, 'built.txt')), 'rebuilt');
   assert.ok(existsSync(join(snap, '.lpm-ready')));
@@ -110,4 +110,101 @@ test('agent drafts treat upstream text as data and flatten hostile file names', 
   const line = text.split('\n').find((l) => l.includes('IGNORE ALL'));
   assert.ok(line.startsWith('- a.js '), 'file name stays on one bullet line');
   assert.ok(!line.includes('`'), 'no backticks that could open a code span');
+});
+
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const UNDO = fileURLToPath(new URL('../scripts/undo.mjs', import.meta.url));
+const undo = (...args) => execFileSync(process.execPath, [UNDO, '--home', w.dshHome, '--dsh-root', w.dshRoot, ...args], { encoding: 'utf8' });
+
+test('emergency undo restores originals without dsh running', async () => {
+  await w.mgr.migrate({ name: CORE }, w.log);
+  await w.mgr.apply({ name: CORE }, w.log);
+  assert.ok(lstatSync(corePath()).isSymbolicLink());
+  assert.match(undo('--list'), /dsh-fake-core/);
+  assert.match(undo('--all'), /restored @deepseek-ai\/dsh-fake-core[\s\S]*done/);
+  assert.ok(!lstatSync(corePath()).isSymbolicLink(), 'original folder is back');
+  assert.match(readFileSync(join(corePath(), 'lib/index.js'), 'utf8'), /hand edit/);
+  assert.match(undo('--list'), /nothing is applied/);
+});
+
+test('a broken merge cannot go live: the load check blocks it and the live plugin stays', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);
+  const live = (await import('node:fs')).realpathSync(w.env.stableLink('lpm-npm'));
+  writeFileSync(join(w.env.repoDir('lpm-npm'), 'index.js'), 'export const = ;\n');
+  await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /load check failed.*index\.js/s);
+  assert.equal((await import('node:fs')).realpathSync(w.env.stableLink('lpm-npm')), live);
+
+  writeFileSync(join(w.env.repoDir('lpm-npm'), 'index.js'), 'export const line = "ok";\n');
+  const pj = JSON.parse(readFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), 'utf8'));
+  pj.main = 'gone.js';
+  writeFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), JSON.stringify(pj));
+  await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /missing entry file/);
+});
+
+test('scripts need permission: once, always, and revoke', async () => {
+  const origin = makeGitOrigin(w.base, 'lpm-git');
+  await w.mgr.addNew({ input: origin.url }, w.log);
+  let n = 0;
+  // a new commit each time, because an already-built snapshot of the same commit is simply reused
+  const bump = async () => { writeFileSync(join(w.env.repoDir('lpm-git'), `n${++n}.txt`), 'x'); await w.mgr.commit({ name: 'lpm-git', message: `n${n}` }, w.log); };
+
+  const err = await w.mgr.apply({ name: 'lpm-git' }, w.log).catch((e) => e);
+  assert.ok(err.needsTrust?.length, 'build needs permission');
+  assert.ok(!existsSync(w.env.stableLink('lpm-git')), 'nothing went live');
+
+  await w.mgr.apply({ name: 'lpm-git', allowScripts: true }, w.log);
+  assert.equal(reg().plugins['lpm-git'].trustScripts, false, 'allow-once is not remembered');
+  await bump();
+  await assert.rejects(w.mgr.apply({ name: 'lpm-git' }, w.log), /permission/);
+
+  await w.mgr.apply({ name: 'lpm-git', alwaysAllow: true }, w.log);
+  assert.equal(reg().plugins['lpm-git'].trustScripts, true);
+  await bump();
+  await w.mgr.apply({ name: 'lpm-git' }, w.log); // no prompt now
+
+  await w.mgr.setTrust({ name: 'lpm-git', trust: false }, w.log);
+  await bump();
+  await assert.rejects(w.mgr.apply({ name: 'lpm-git' }, w.log), /permission/);
+
+  // trust is tied to the origin: a different origin asks again
+  await w.mgr.setTrust({ name: 'lpm-git', trust: true }, w.log);
+  const r = reg(); r.plugins['lpm-git'].trustedOrigin = 'https://example.invalid/other.git'; saveRegistry(w.env.registryFile, r);
+  await bump();
+  await assert.rejects(w.mgr.apply({ name: 'lpm-git' }, w.log), /permission/);
+});
+
+test('library install scripts are blocked until allowed; the op records what to ask', async () => {
+  const dep = join(w.base, 'evil-dep');
+  mkdirSync(dep, { recursive: true });
+  writeFileSync(join(dep, 'package.json'), JSON.stringify({ name: 'evil-dep', version: '1.0.0', scripts: { postinstall: 'node -e "require(\'fs\').writeFileSync(\'/tmp/lpm-should-not-exist\',\'x\')"' } }));
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  const pj = JSON.parse(readFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), 'utf8'));
+  pj.dependencies = { 'evil-dep': `file:${dep}` };
+  writeFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), JSON.stringify(pj));
+  const { createOps } = await import('../lib/ops.js');
+  const ops = createOps();
+  const op = ops.start('apply', 'lpm-npm', (log) => w.mgr.apply({ name: 'lpm-npm' }, log), { action: 'apply', body: { name: 'lpm-npm' } });
+  await op.promise;
+  const view = ops.get(op.id);
+  assert.equal(view.status, 'error');
+  assert.match(view.needsTrust.join(' '), /evil-dep/);
+  assert.deepEqual(view.request, { action: 'apply', body: { name: 'lpm-npm' } });
+  assert.ok(!existsSync('/tmp/lpm-should-not-exist'), 'the script never ran');
+});
+
+test('always-allow is tied to the approved publisher', async () => {
+  const dep = join(w.base, 'evil-dep2');
+  mkdirSync(dep, { recursive: true });
+  writeFileSync(join(dep, 'package.json'), JSON.stringify({ name: 'evil-dep2', version: '1.0.0', scripts: { postinstall: 'exit 1' } }));
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  const file = join(w.env.repoDir('lpm-npm'), 'package.json');
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), dependencies: { 'evil-dep2': `file:${dep}` } }));
+  const r = reg();
+  r.plugins['lpm-npm'].trustScripts = true;
+  r.plugins['lpm-npm'].trustedPublisher = 'alice'; // approved publisher; fixtures report none, i.e. "someone else"
+  saveRegistry(w.env.registryFile, r);
+  await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /permission/);
+  assert.ok(w.logs.some((l) => /publisher is now unknown \(you allowed alice\)/.test(l)));
 });

@@ -189,11 +189,12 @@ function OpPanel({ op, lastOp }) {
     (0, import_react.createElement)("pre", { ref, style: c.pre }, shown.log.slice(-200).join("\n"))
   );
 }
-function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
+function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
   const stats = p.stats ?? {};
   const state = p.applied ? p.linkLost ? "Link lost" : "Applied" : "Tracked only";
   const tone = p.applied ? p.linkLost ? "warning" : "success" : "neutral";
   const [agentErr, setAgentErr] = (0, import_react.useState)(null);
+  const trustAsk = lastOp && lastOp.status === "error" && lastOp.needsTrust && lastOp.request && lastOp.target === p.name ? lastOp : null;
   async function agent(mode) {
     setAgentErr(null);
     try {
@@ -214,7 +215,8 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: p.kind === "core" ? "info" : "outline" }, p.kind === "core" ? "core" : "third-party"),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone }, state),
       p.update?.available && !p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, `Update available ${p.update.target && p.update.target !== "upstream" ? short(p.update.target) : ""}`),
-      p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "danger" }, "Conflict")
+      p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "danger" }, "Conflict"),
+      p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, "Scripts always allowed")
     ),
     (0, import_react.createElement)("div", { style: { ...c.muted, marginTop: 4 } }, p.source.type === "git" ? `git \xB7 ${tilde(p.source.url, homePath)}` : `npm \xB7 ${p.source.name}`),
     (0, import_react.createElement)(
@@ -241,6 +243,19 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
         (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Abort the update of ${p.name}?`, body: "The merge attempt is thrown away. Your local branch and the live plugin stay as they are.", action: () => run("abort", { name: p.name }) }) }, "Abort")
       )
     ),
+    trustAsk && (0, import_react.createElement)(
+      "div",
+      { style: c.banner("error"), "data-testid": "lp-trust" },
+      (0, import_react.createElement)("div", null, (0, import_react.createElement)("strong", null, "Permission needed. "), `${p.name} wants to run scripts on your computer, with your full access:`),
+      (0, import_react.createElement)("ul", { style: { margin: "6px 0 6px 18px", padding: 0, fontSize: 12 } }, trustAsk.needsTrust.map((r) => (0, import_react.createElement)("li", { key: r }, r))),
+      (0, import_react.createElement)("div", { style: c.muted }, "Only continue if you trust this plugin and its publisher. Nothing has gone live yet."),
+      (0, import_react.createElement)(
+        "div",
+        { style: { ...c.row, marginTop: 8 } },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, allowScripts: true }) }, "Allow this time"),
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => run(trustAsk.request.action, { ...trustAsk.request.body, alwaysAllow: true }) }, "Always allow for this plugin")
+      )
+    ),
     (0, import_react.createElement)(
       "div",
       { style: { ...c.row, marginTop: 10 } },
@@ -250,6 +265,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath }) {
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "commit", plugin: p }) }, "Commit"),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "rollback", plugin: p }) }, "Deploy older commit\u2026"),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "deps", plugin: p }) }, "Dependency overrides"),
+      p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => run("trust", { name: p.name, trust: false }) }, "Revoke script permission"),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", onClick: () => agent("work") }, "Work on it")
     ),
     agentErr && (0, import_react.createElement)("div", { style: { ...c.muted, color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 6 } }, `Could not open agent session: ${agentErr}`)
@@ -500,7 +516,7 @@ function LocalPluginsSection({ store, ctx, close }) {
       (0, import_react.createElement)("button", { style: { border: "none", background: "none", cursor: "pointer", fontSize: 12, color: "inherit" }, onClick: () => setNotice(null) }, "\u2715")
     ),
     (0, import_react.createElement)(OpPanel, { op: s.op, lastOp: s.lastOp }),
-    s.plugins.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.') : s.plugins.map((p) => (0, import_react.createElement)(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath })),
+    s.plugins.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.') : s.plugins.map((p) => (0, import_react.createElement)(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp })),
     modalEl
   );
 }
