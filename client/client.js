@@ -50,7 +50,10 @@ async function call(action, body = {}, { timeoutMs = 15e3 } = {}) {
   } catch {
     throw new Error(`${action}: HTTP ${res.status}`);
   }
-  if (!data.ok) throw new Error(data.error ?? `${action} failed`);
+  if (!data.ok) {
+    const e = data.error ?? {};
+    throw Object.assign(new Error(typeof e === "string" ? e : e.message ?? `${action} failed`), { code: e.code, details: e.details });
+  }
   return data.value;
 }
 function createStateStore() {
@@ -162,35 +165,240 @@ function useAction(store, setNotice) {
     store.refresh();
   }, [store, setNotice]);
 }
-function OpPanel({ op, lastOp }) {
+var EXPECTED_API = 2;
+var fmtBytes = (n) => n >= 1073741824 ? `${(n / 1073741824).toFixed(2)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(0, Math.round((n || 0) / 1024))} KB`;
+var fmtDur = (ms) => ms < 1e3 ? `${Math.round(ms)} ms` : `${(ms / 1e3).toFixed(1)} s`;
+var VERB = { apply: "Applying", update: "Updating", "finish update": "Finishing the update of", "abort update": "Aborting the update of", "restore original": "Unlinking", commit: "Committing", "dependency override": "Saving a dependency override for", migrate: "Migrating", add: "Adding", check: "Checking for updates", "reapply all": "Reapplying", repair: "Repairing the installation", delete: "Deleting", cleanup: "Cleaning up", trust: "Changing script permission for", "startup recovery": "Checking the installation" };
+var linkButton = { border: "none", background: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0, fontSize: 12 };
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function OpPanel({ op, lastOp, run, workOn, plugins }) {
   const [open, setOpen] = (0, import_react.useState)(false);
-  const shown = op ?? (lastOp?.status === "error" || open ? lastOp : null);
+  const [dismissed, setDismissed] = (0, import_react.useState)(null);
+  const [copied, setCopied] = (0, import_react.useState)(false);
+  const [, tick] = (0, import_react.useState)(0);
   const ref = (0, import_react.useRef)(null);
+  (0, import_react.useEffect)(() => {
+    if (!op) return void 0;
+    const t = setInterval(() => tick((n) => n + 1), 500);
+    return () => clearInterval(t);
+  }, [op?.id]);
   (0, import_react.useEffect)(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   });
-  if (!shown && !lastOp) return null;
-  if (!shown) {
+  const shown = op ?? lastOp;
+  if (!shown || !op && dismissed === shown.id) return null;
+  const running = shown.status === "running";
+  const failed = shown.status === "error";
+  const label = `${shown.kind}${shown.target ? ` ${shown.target}` : ""}`;
+  const elapsed = running ? Date.now() - shown.startedAt : shown.durationMs ?? 0;
+  const lastLine = shown.log.length ? shown.log[shown.log.length - 1] : "";
+  const exists = plugins.some((p) => p.name === shown.target);
+  const canRetry = failed && shown.request && !shown.needsTrust && shown.errorCode !== "BUSY";
+  const logBox = (open || running) && (0, import_react.createElement)("pre", { ref, style: c.pre }, shown.log.slice(-200).join("\n"));
+  const logButtons = [
+    (0, import_react.createElement)("button", { key: "v", style: linkButton, onClick: () => setOpen(!open) }, open ? "Hide logs" : "View logs"),
+    (0, import_react.createElement)("button", { key: "c", style: linkButton, onClick: async () => {
+      setCopied(await copyText(shown.log.join("\n")));
+      setTimeout(() => setCopied(false), 1500);
+    } }, copied ? "Copied" : "Copy log")
+  ];
+  if (running) {
     return (0, import_react.createElement)(
       "div",
-      { style: { ...c.muted, marginTop: 10 } },
-      `Last: ${lastOp.kind}${lastOp.target ? ` ${lastOp.target}` : ""} \u2014 ${lastOp.status} `,
-      (0, import_react.createElement)("button", { style: { border: "none", background: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0, fontSize: 12 }, onClick: () => setOpen(true) }, "show log")
+      { style: c.banner("info"), "data-testid": "lp-op" },
+      (0, import_react.createElement)("div", { style: c.row }, (0, import_react.createElement)("strong", null, `\u23F3 ${VERB[shown.kind] ?? shown.kind}${shown.target ? ` ${shown.target}` : ""}\u2026`), (0, import_react.createElement)("span", { style: c.muted }, fmtDur(elapsed))),
+      lastLine && (0, import_react.createElement)("div", { style: { ...c.muted, marginTop: 4 } }, lastLine.slice(0, 160)),
+      logBox
     );
   }
-  const tone = shown.status === "error" ? "error" : shown.status === "running" ? "info" : "info";
+  if (!failed) {
+    return (0, import_react.createElement)(
+      "div",
+      { style: { ...c.muted, marginTop: 10 }, "data-testid": "lp-op" },
+      `\u2714 ${label} \u2014 done in ${fmtDur(elapsed)} `,
+      ...logButtons,
+      " ",
+      (0, import_react.createElement)("button", { style: linkButton, onClick: () => setDismissed(shown.id) }, "dismiss"),
+      logBox
+    );
+  }
   return (0, import_react.createElement)(
     "div",
-    { style: c.banner(tone), "data-testid": "lp-op" },
+    { style: c.banner("error"), "data-testid": "lp-op" },
+    (0, import_react.createElement)("div", { style: c.row }, (0, import_react.createElement)("strong", null, `\u2716 ${shown.title ?? "Failed"}`), shown.target && (0, import_react.createElement)("span", { style: c.muted }, shown.target), (0, import_react.createElement)("button", { style: { ...linkButton, marginLeft: "auto" }, onClick: () => setDismissed(shown.id) }, "dismiss")),
+    (0, import_react.createElement)("div", { style: { marginTop: 6, whiteSpace: "pre-wrap" } }, shown.error),
+    shown.advice && (0, import_react.createElement)(
+      "div",
+      { style: { marginTop: 8 } },
+      (0, import_react.createElement)("div", null, (0, import_react.createElement)("strong", null, "Is it safe? "), shown.advice.safe),
+      (0, import_react.createElement)("div", { style: { marginTop: 4 } }, (0, import_react.createElement)("strong", null, "What now? "), shown.advice.next)
+    ),
     (0, import_react.createElement)(
       "div",
-      { style: c.row },
-      (0, import_react.createElement)("strong", null, shown.status === "running" ? "\u23F3 Running: " : shown.status === "error" ? "\u2716 Failed: " : "\u2714 Done: "),
-      (0, import_react.createElement)("span", null, `${shown.kind}${shown.target ? ` ${shown.target}` : ""}`),
-      !op && (0, import_react.createElement)("button", { style: { marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "inherit", fontSize: 12 }, onClick: () => setOpen(false) }, "hide")
+      { style: { ...c.row, marginTop: 8 } },
+      canRetry && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", onClick: () => run(shown.request.action, shown.request.body) }, "Retry"),
+      exists && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", onClick: () => workOn(shown.target, shown.request?.action === "finish" ? "conflict" : "work") }, "Work on it"),
+      ...logButtons,
+      (0, import_react.createElement)("span", { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` \xB7 ${shown.errorCode}` : ""}`)
     ),
-    shown.error && (0, import_react.createElement)("div", { style: { marginTop: 4 } }, shown.error),
-    (0, import_react.createElement)("pre", { ref, style: c.pre }, shown.log.slice(-200).join("\n"))
+    logBox
+  );
+}
+function HistoryPanel({ s }) {
+  const [open, setOpen] = (0, import_react.useState)(false);
+  const [rows, setRows] = (0, import_react.useState)([]);
+  const [sel, setSel] = (0, import_react.useState)(null);
+  const [full, setFull] = (0, import_react.useState)(null);
+  (0, import_react.useEffect)(() => {
+    if (!open) return;
+    call("history").then((v) => setRows(v.operations)).catch(() => {
+    });
+  }, [open, s.lastOp?.id, s.op?.id]);
+  (0, import_react.useEffect)(() => {
+    if (sel == null) {
+      setFull(null);
+      return;
+    }
+    call("op", { id: sel }).then(setFull).catch(() => setFull(null));
+  }, [sel]);
+  return (0, import_react.createElement)(
+    "div",
+    { style: { marginTop: 10 } },
+    (0, import_react.createElement)("button", { style: linkButton, onClick: () => setOpen(!open), "data-testid": "lp-history-toggle" }, open ? "Hide recent operations" : "Recent operations"),
+    open && (0, import_react.createElement)(
+      "div",
+      { style: { ...c.list, maxHeight: 200 }, "data-testid": "lp-history" },
+      rows.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.muted, padding: 10 } }, "Nothing has run since dsh started.") : rows.map((o) => (0, import_react.createElement)(
+        "div",
+        { key: o.id, style: c.listItem(sel === o.id), onClick: () => setSel(sel === o.id ? null : o.id) },
+        (0, import_react.createElement)("span", null, `${o.status === "ok" ? "\u2714" : o.status === "error" ? "\u2716" : "\u23F3"} ${o.kind}${o.target ? ` ${o.target}` : ""}`),
+        (0, import_react.createElement)("span", { style: c.muted }, `${fmtDur(o.durationMs ?? 0)}${o.status === "error" && o.errorCode ? ` \xB7 ${o.errorCode}` : ""}`)
+      ))
+    ),
+    open && full && (0, import_react.createElement)("pre", { style: c.pre }, `${full.error ? `${full.error}
+
+` : ""}${full.log.join("\n")}`)
+  );
+}
+function DiskPanel({ busy, run, openModal }) {
+  const [open, setOpen] = (0, import_react.useState)(false);
+  const [data, setData] = (0, import_react.useState)(null);
+  const [err, setErr] = (0, import_react.useState)(null);
+  async function load() {
+    setErr(null);
+    try {
+      setData(await call("diskUsage", {}, { timeoutMs: 6e4 }));
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+  (0, import_react.useEffect)(() => {
+    if (open) load();
+  }, [open]);
+  return (0, import_react.createElement)(
+    "div",
+    { style: { marginTop: 10 } },
+    (0, import_react.createElement)("button", { style: linkButton, onClick: () => setOpen(!open), "data-testid": "lp-disk-toggle" }, open ? "Hide disk usage" : "Disk usage"),
+    open && (0, import_react.createElement)(
+      "div",
+      { style: c.card, "data-testid": "lp-disk" },
+      err && (0, import_react.createElement)("div", { style: { color: "var(--dsw-alias-state-error-primary,#dc2626)" } }, `Could not measure disk usage: ${err}`),
+      !data && !err && (0, import_react.createElement)("div", { style: c.muted }, "Measuring\u2026"),
+      data && (0, import_react.createElement)(
+        "div",
+        null,
+        Object.entries(data.plugins).map(([name2, u]) => (0, import_react.createElement)(
+          "div",
+          { key: name2, style: { ...c.row, justifyContent: "space-between", fontSize: 13 } },
+          (0, import_react.createElement)("span", null, name2),
+          (0, import_react.createElement)("span", { style: c.muted }, `repo ${fmtBytes(u.repo)} \xB7 ${u.snapshotCount} snapshot(s) ${fmtBytes(u.snapshots)} \xB7 worktrees ${fmtBytes(u.worktrees)} \xB7 backups ${fmtBytes(u.backups)}`)
+        )),
+        (0, import_react.createElement)(
+          "div",
+          { style: { ...c.row, justifyContent: "space-between", marginTop: 8, fontSize: 13 } },
+          (0, import_react.createElement)("strong", null, `Total ${fmtBytes(data.total)}`),
+          (0, import_react.createElement)("span", { style: c.muted }, `trash ${fmtBytes(data.trash)}`)
+        ),
+        (0, import_react.createElement)(
+          "div",
+          { style: { ...c.row, marginTop: 8 } },
+          (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => openModal({ kind: "cleanup" }) }, "Clean up old snapshots\u2026"),
+          (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", onClick: load }, "Measure again")
+        )
+      )
+    )
+  );
+}
+function CleanupModal({ run, onClose }) {
+  const [plan, setPlan] = (0, import_react.useState)(null);
+  const [err, setErr] = (0, import_react.useState)(null);
+  (0, import_react.useEffect)(() => {
+    call("cleanupPreview", {}, { timeoutMs: 6e4 }).then(setPlan).catch((e) => setErr(e.message));
+  }, []);
+  const nothing = plan && plan.snapshots.length === 0;
+  return (0, import_react.createElement)(
+    import_dsh_client_ui_primitives.Modal,
+    {
+      open: true,
+      onClose,
+      title: "Clean up old snapshots",
+      closeLabel: "Close",
+      footer: (0, import_react.createElement)(
+        "div",
+        { style: c.row },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "ghost", onClick: onClose }, "Cancel"),
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "primary", disabled: !plan || nothing, onClick: () => {
+          run("cleanup", { execute: true });
+          onClose();
+        } }, plan && !nothing ? `Remove ${plan.snapshots.length} (${fmtBytes(plan.bytes)})` : "Remove")
+      )
+    },
+    (0, import_react.createElement)(
+      "div",
+      { style: { fontSize: 13, lineHeight: 1.6 } },
+      err ? `Could not prepare the preview: ${err}` : !plan ? "Working out what can be removed\u2026" : nothing ? "Nothing to clean up: every snapshot is either live, the rollback target, or within the retention limit." : (0, import_react.createElement)(
+        "div",
+        null,
+        "These deployments are older than the retention limit. The live one and the rollback target are never removed, and any of them can be rebuilt from git:",
+        (0, import_react.createElement)("ul", { style: { margin: "8px 0 0 18px", padding: 0 } }, plan.snapshots.map((x) => (0, import_react.createElement)("li", { key: x.name, style: c.mono }, `${x.name} \u2014 ${fmtBytes(x.bytes)}`)))
+      )
+    )
+  );
+}
+function DeleteModal({ plugin, run, onClose }) {
+  const [typed, setTyped] = (0, import_react.useState)("");
+  return (0, import_react.createElement)(
+    import_dsh_client_ui_primitives.Modal,
+    {
+      open: true,
+      onClose,
+      title: `Delete local plugin ${plugin.name}?`,
+      closeLabel: "Close",
+      footer: (0, import_react.createElement)(
+        "div",
+        { style: c.row },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "ghost", onClick: onClose }, "Cancel"),
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "primary", disabled: typed !== plugin.name, onClick: () => {
+          run("delete", { name: plugin.name, confirmName: typed });
+          onClose();
+        } }, "Delete")
+      )
+    },
+    (0, import_react.createElement)(
+      "div",
+      { style: { fontSize: 13, lineHeight: 1.6 } },
+      (0, import_react.createElement)("p", { style: { marginTop: 0 } }, "This stops tracking the plugin. dsh is not affected (it already has the original back)."),
+      (0, import_react.createElement)("p", null, "Your repo, with every commit and stash, is ", (0, import_react.createElement)("strong", null, "moved to the trash folder"), " (not deleted) and can be moved back; deployment snapshots are removed because they can be rebuilt."),
+      (0, import_react.createElement)("p", null, `Type ${plugin.name} to confirm:`),
+      (0, import_react.createElement)("input", { style: { ...c.input, width: "100%" }, value: typed, placeholder: plugin.name, onChange: (e) => setTyped(e.target.value), "data-testid": "lp-delete-input" })
+    )
   );
 }
 function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, issues }) {
@@ -279,9 +487,10 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
     (0, import_react.createElement)(
       "div",
       { style: { ...c.row, marginTop: 10 } },
-      allows("apply") && fixedSinceCrash && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "apply" || !st ? "primary" : "outline", disabled: busy || Boolean(p.pending), onClick: () => run("apply", { name: p.name }) }, p.applied ? "Apply latest commit" : "Apply"),
+      allows("apply") && fixedSinceCrash && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "apply" || !st ? "primary" : "outline", disabled: busy || Boolean(p.pending), onClick: () => p.kind === "core" && !p.applied ? openModal({ kind: "confirm", title: `Replace the built-in ${p.name}?`, body: 'This changes a package inside your dsh installation: the original folder is moved to a backup and replaced by a link to your version. "Unlink" puts the original back, and if dsh crashes after this the original is restored automatically. Continue?', action: () => run("apply", { name: p.name }) }) : run("apply", { name: p.name }) }, p.applied ? "Apply latest commit" : "Apply"),
       p.update?.available && allows("update") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "update" ? "primary" : "outline", disabled: busy, onClick: () => run("update", { name: p.name }) }, "Update"),
-      p.applied && allows("restore") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Restore the original ${p.name}?`, body: p.kind === "core" ? "dsh goes back to the built-in package that shipped with it. Your local repo stays tracked \u2014 click Apply to switch back." : "dsh reinstalls the original version spec it had before (for example ^1.0.0). Your local repo stays tracked \u2014 click Apply to switch back.", action: () => run("restore", { name: p.name }) }) }, "Restore original"),
+      p.applied && allows("restore") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Unlink ${p.name} and restore the original?`, body: p.kind === "core" ? "dsh goes back to the built-in package that shipped with it. Your local repo stays tracked \u2014 click Apply to switch back." : "dsh reinstalls the original version spec it had before (for example ^1.0.0). Your local repo stays tracked \u2014 click Apply to switch back.", action: () => run("restore", { name: p.name }) }) }, "Unlink (restore original)"),
+      allows("delete") && !p.applied && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "delete", plugin: p }), "data-testid": `lp-delete-${p.name}` }, "Delete\u2026"),
       allows("commit") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "commit", plugin: p }) }, "Commit"),
       allows("rollback") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "rollback" ? "outline" : "ghost", disabled: busy, onClick: () => openModal({ kind: "rollback", plugin: p }) }, "Deploy older commit\u2026"),
       allows("setDep") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "deps", plugin: p }) }, "Dependency overrides"),
@@ -464,6 +673,15 @@ function LocalPluginsSection({ store, ctx, close }) {
   const [restarting, setRestarting] = (0, import_react.useState)(false);
   const run = useAction(store, setNotice);
   const busy = Boolean(s?.op);
+  async function workOn(name2, mode = "work") {
+    try {
+      const draft = await call("agentDraft", { name: name2, mode });
+      close?.();
+      await openAgentSession(ctx, draft);
+    } catch (err) {
+      setNotice({ tone: "error", text: `Could not open an agent session: ${err.message}` });
+    }
+  }
   async function restart() {
     setRestarting(true);
     try {
@@ -494,10 +712,17 @@ function LocalPluginsSection({ store, ctx, close }) {
   }
   const homePath = s?.env?.home ?? "";
   if (!s) return (0, import_react.createElement)("div", { style: c.muted }, error ? `Could not load: ${error}` : "Loading\u2026");
-  const modalEl = !modal ? null : modal.kind === "add" ? (0, import_react.createElement)(AddModal, { onClose: () => setModal(null), run }) : modal.kind === "commit" ? (0, import_react.createElement)(CommitModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "rollback" ? (0, import_react.createElement)(RollbackModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "deps" ? (0, import_react.createElement)(DepsModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : (0, import_react.createElement)(ConfirmModal, { ...modal, onClose: () => setModal(null) });
+  const modalEl = !modal ? null : modal.kind === "add" ? (0, import_react.createElement)(AddModal, { onClose: () => setModal(null), run }) : modal.kind === "commit" ? (0, import_react.createElement)(CommitModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "rollback" ? (0, import_react.createElement)(RollbackModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "deps" ? (0, import_react.createElement)(DepsModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "delete" ? (0, import_react.createElement)(DeleteModal, { plugin: modal.plugin, onClose: () => setModal(null), run }) : modal.kind === "cleanup" ? (0, import_react.createElement)(CleanupModal, { onClose: () => setModal(null), run }) : (0, import_react.createElement)(ConfirmModal, { ...modal, onClose: () => setModal(null) });
   return (0, import_react.createElement)(
     "div",
     { "data-testid": "lp-section", style: { maxWidth: 720 } },
+    s.apiVersion !== EXPECTED_API && (0, import_react.createElement)(
+      "div",
+      { style: c.banner("error"), "data-testid": "lp-version" },
+      (0, import_react.createElement)("strong", null, "This page is out of date. "),
+      `It speaks API ${EXPECTED_API} but the server speaks ${s.apiVersion ?? "an older version"}. Reload the page.`,
+      (0, import_react.createElement)("div", { style: { marginTop: 8 } }, (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", onClick: () => location.reload() }, "Reload"))
+    ),
     (0, import_react.createElement)(
       "div",
       { style: { ...c.row, justifyContent: "space-between" } },
@@ -558,7 +783,16 @@ function LocalPluginsSection({ store, ctx, close }) {
         } }, "Dismiss")
       )
     )),
-    (0, import_react.createElement)(OpPanel, { op: s.op, lastOp: s.lastOp }),
+    (0, import_react.createElement)(OpPanel, { op: s.op, lastOp: s.lastOp, run, workOn, plugins: s.plugins }),
+    (0, import_react.createElement)(HistoryPanel, { s }),
+    (0, import_react.createElement)(DiskPanel, { busy, run, openModal: setModal }),
+    Object.keys(s.quarantine ?? {}).length > 0 && (0, import_react.createElement)(
+      "div",
+      { style: c.banner("warn"), "data-testid": "lp-quarantine" },
+      (0, import_react.createElement)("strong", null, "Some registry entries were set aside (kept, not used): "),
+      Object.entries(s.quarantine).map(([n, q]) => (0, import_react.createElement)("div", { key: n, style: { marginTop: 4 } }, `\u2022 ${n} \u2014 ${q.problems.join("; ")}`)),
+      (0, import_react.createElement)("div", { style: c.muted }, 'Nothing was deleted. "Repair installation" rebuilds missing entries from your repos.')
+    ),
     s.plugins.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.') : s.plugins.map((p) => (0, import_react.createElement)(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp, issues: s.issues })),
     modalEl
   );
