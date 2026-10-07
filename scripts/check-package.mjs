@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const { redact } = await import(pathToFileURL(join(root, 'lib', 'redact.js')).href);
+const { privateTerms } = await import(pathToFileURL(join(root, 'scripts', 'private-terms.mjs')).href);
 const problems = [];
 const bad = (m) => problems.push(m);
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -35,11 +36,7 @@ try {
   // ---- 3. contents: no secrets, no local paths, no personal data ----
   const ex = join(work, 'x'); mkdirSync(ex);
   execFileSync('tar', ['-xzf', tgz, '-C', ex]);
-  // What must never ship: any home-directory path, the current user's account name, and any extra private terms the
-  // maintainer lists in LPM_PRIVATE_TERMS (comma separated, e.g. an employer name). Nothing personal is hardcoded here.
-  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const extra = (process.env.LPM_PRIVATE_TERMS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const LOCAL = [/\/Users\/[\w.-]+/, /\/home\/[\w.-]+\//, new RegExp(esc(userInfo().username), 'i'), ...extra.map((t) => new RegExp(esc(t), 'i'))];
+  const LOCAL = privateTerms({ username: userInfo().username });
   const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
   const ALLOWED_EMAILS = new Set(['local-plugins@dsh.local']);
   const walk = (d, o = []) => { for (const n of readdirSync(d)) { const p = join(d, n); statSync(p).isDirectory() ? walk(p, o) : o.push(p); } return o; };
