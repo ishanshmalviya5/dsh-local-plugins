@@ -64,8 +64,7 @@ Status is what has actually been demonstrated, not what is intended. **Shown** =
 2. *Registry, git, filesystem and the dsh install never silently disagree.* — `reconcile` (see [recovery.md](recovery.md)), adoption of v0.1 deployments, `state().issues` shown on every card.
 3. *No operation silently destroys committed work or the original dsh installation.* — originals go to `.backup`, deleted repos to `.trash`, user work to stash + rescue branch before any revert, `local` is never rewritten, tamper-proof path checks.
 
-## Remaining human steps
-Done: the branch is merged and CI is green.
-* Tag `v0.2.0` (the tag triggers the release-check workflow, which re-runs everything and attaches the package).
-* Decide whether the Linux / Node 22–24 results justify widening the compatibility table (README, `engines`, `os`), ideally after an end-to-end run on a Linux machine.
-* Read the `npm pack` file list; `npm publish` yourself if you want it on npm.
+## Where the release stands
+Done: 0.2.0 is merged, CI is green, tagged (`v0.2.0`), released on GitHub with the validated package attached, and published to npm. 0.2.1 (the corrected `LICENSE` text) follows the same path: merge, CI, tag, release, npm.
+* An end-to-end run on a Linux machine, so the compatibility table can say more than "unit tests and package validation pass in CI".
+* Widening `engines` / `os` only after that run.

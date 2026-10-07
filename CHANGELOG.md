@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-07
 
 ### Fixed
 - `LICENSE` now contains the standard MIT text. The file shipped in 0.1.0 and 0.2.0 had a garbled warranty paragraph and was missing the standard limitation-of-liability clause, so GitHub could not recognise the license. The license itself (MIT, `package.json`) is unchanged.
