@@ -22,6 +22,8 @@ Hardening release. The architecture is unchanged: dsh only runs a commit, deploy
 - **Git pins** (`url#tag`, `#branch`, `#commit`), **npm pins** (`name@1.2.3`, `name@tag`), readable errors for every origin failure, manifest and rename checks.
 - **Delete local plugin** (repo moves to a recoverable `.trash`), **Unlink**, **disk usage**, **cleanup** with preview, **operation history**, configurable snapshot retention (`LPM_KEEP_SNAPSHOTS`), rollback target always kept.
 - **API v2**: one error shape `{ code, message, details }`, JSON-only, fail-closed auth, idempotent Apply/Restore, documented in `docs/api.md`.
+- Agent sessions ("Work on it", "Fix with agent") start in **Creator mode** (the `cordis` preset), falling back to Standard if a dsh has no such preset. Every agent prompt carries the same rules: work through git only, never touch `.deployed/`, the stable link, `.backup/` or the dsh install, never bypass the plugin manager, never discard changes you did not make, which commands are safe.
+- Retention is a setting in the Disk usage panel; leftover trial-merge folders are reported and removed by Clean up; "Copy repo/worktree path" buttons; the operation log records the commit and snapshot each Apply produced.
 - `scripts/undo.mjs`: put the originals back from a terminal when dsh cannot start.
 - Docs: architecture, state machine, recovery, security, API, development, troubleshooting, performance, compatibility.
 

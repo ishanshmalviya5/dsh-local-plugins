@@ -2,7 +2,7 @@
 //   - Settings → "Local Plugins": list, add/migrate, update/conflicts, apply/restore,
 //     commit, rollback, dependency overrides, Reapply all, Restart
 //   - sidebar footer badge: updates + conflicts + restart-needed count
-//   - "Work on it" / "Fix with agent": a new dsh session (standard preset) in the
+//   - "Work on it" / "Fix with agent": a new dsh session (Creator mode, the `cordis` preset) in the
 //     plugin folder with a prefilled, unsent draft
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Modal, Tag } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -13,6 +13,7 @@ const inject = ['slots', 'remote', 'remote.agentPresets'];
 const API = '/local-plugins-api';
 const SECTION_ID = 'local-plugins';
 const SECTION_LABEL = 'Local Plugins';
+const AGENT_PRESET = 'cordis'; // Creator mode
 
 // ---------- data ----------
 
@@ -90,11 +91,16 @@ async function openAgentSession(ctx, { path, text }) {
   const sessions = ctx.get('sessions');
   const ws = await workspaces.create({ path });
   const sid = await sessions.create({ workspaceId: ws.workspaceId });
-  try {
-    const r = await ctx.remote.agentPresets.select(sid, 'standard');
-    if (r && r.ok === false) console.warn('[dsh-local-plugins] preset select refused', r.error);
-  } catch (err) {
-    console.warn('[dsh-local-plugins] preset select failed', err);
+  // Creator mode (the `cordis` preset) is dsh's mode for building and changing plugins, which is what these sessions do.
+  // If this dsh has no such preset, fall back to the everyday one rather than failing to open the session.
+  for (const preset of [AGENT_PRESET, 'standard']) {
+    try {
+      const r = await ctx.remote.agentPresets.select(sid, preset);
+      if (!r || r.ok !== false) break;
+      console.warn(`[dsh-local-plugins] preset "${preset}" refused`, r.error);
+    } catch (err) {
+      console.warn(`[dsh-local-plugins] preset "${preset}" failed`, err);
+    }
   }
   ctx.get('uiWorkspace').openSession(sid);
   ctx.get('conversation').input.for(sessions.scope(sid)).setDraft(text);
@@ -170,7 +176,10 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
   const label = `${shown.kind}${shown.target ? ` ${shown.target}` : ''}`;
   const elapsed = running ? Date.now() - shown.startedAt : shown.durationMs ?? 0;
   const lastLine = shown.log.length ? shown.log[shown.log.length - 1] : '';
-  const exists = plugins.some((p) => p.name === shown.target);
+  const plugin = plugins.find((p) => p.name === shown.target);
+  const exists = Boolean(plugin);
+  const pathToCopy = plugin?.pending?.worktree ?? plugin?.repo ?? null;
+  const pathLabel = plugin?.pending ? 'Copy worktree path' : 'Copy repo path';
   const canRetry = failed && shown.request && !shown.needsTrust && shown.errorCode !== 'BUSY';
   const logBox = (open || running) && h('pre', { ref, style: c.pre }, shown.log.slice(-200).join('\n'));
   const logButtons = [
@@ -197,7 +206,9 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
     h('div', { style: { ...c.row, marginTop: 8 } },
       canRetry && h(Button, { size: 'sm', variant: 'primary', onClick: () => run(shown.request.action, shown.request.body) }, 'Retry'),
       exists && h(Button, { size: 'sm', variant: 'outline', onClick: () => workOn(shown.target, shown.request?.action === 'finish' ? 'conflict' : 'work') }, 'Work on it'),
-      logButtons[0], logButtons[1], h('span', { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` · ${shown.errorCode}` : ''}`)),
+      logButtons[0], logButtons[1],
+      pathToCopy && h('button', { style: linkButton, onClick: async () => { setCopied(await copyText(pathToCopy)); setTimeout(() => setCopied(false), 1500); }, title: pathToCopy, 'data-testid': 'lp-copy-path' }, pathLabel),
+      h('span', { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` · ${shown.errorCode}` : ''}`)),
     logBox);
 }
 
@@ -226,8 +237,10 @@ function HistoryPanel({ s }) {
 }
 
 /** Disk use per plugin, computed on demand (it walks the folders), plus a safe snapshot cleanup. */
-function DiskPanel({ busy, run, openModal }) {
+function DiskPanel({ busy, run, openModal, settings }) {
   const [open, setOpen] = useState(false);
+  const [keep, setKeep] = useState(null);
+  const [saved, setSaved] = useState(null);
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   async function load() { setErr(null); try { setData(await call('diskUsage', {}, { timeoutMs: 60000 })); } catch (e) { setErr(e.message); } }
@@ -243,6 +256,13 @@ function DiskPanel({ busy, run, openModal }) {
           h('span', { style: c.muted }, `repo ${fmtBytes(u.repo)} · ${u.snapshotCount} snapshot(s) ${fmtBytes(u.snapshots)} · worktrees ${fmtBytes(u.worktrees)} · backups ${fmtBytes(u.backups)}`))),
         h('div', { style: { ...c.row, justifyContent: 'space-between', marginTop: 8, fontSize: 13 } },
           h('strong', null, `Total ${fmtBytes(data.total)}`), h('span', { style: c.muted }, `trash ${fmtBytes(data.trash)}`)),
+        settings && h('div', { style: { ...c.row, marginTop: 10, fontSize: 13 }, 'data-testid': 'lp-retention' },
+          h('span', null, 'Keep'),
+          h('input', { type: 'number', min: 1, max: 20, style: { ...c.input, width: 64 }, disabled: settings.keepFromEnv, value: keep ?? settings.keepSnapshots, onChange: (e) => { setKeep(e.target.value); setSaved(null); }, 'data-testid': 'lp-keep-input' }),
+          h('span', null, 'deployments per plugin'),
+          h(Button, { size: 'sm', variant: 'outline', disabled: settings.keepFromEnv || keep == null || Number(keep) === settings.keepSnapshots, onClick: async () => { try { await call('setSettings', { keepSnapshots: Number(keep) }); setSaved('Saved'); } catch (e) { setSaved(e.message); } } }, 'Save'),
+          saved && h('span', { style: c.muted }, saved),
+          h('div', { style: { ...c.muted, width: '100%' } }, settings.keepFromEnv ? 'Set by the LPM_KEEP_SNAPSHOTS environment variable, which overrides this.' : 'The live deployment and the one you can roll back to are always kept, whatever this says.')),
         h('div', { style: { ...c.row, marginTop: 8 } },
           h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => openModal({ kind: 'cleanup' }) }, 'Clean up old snapshots…'),
           h(Button, { size: 'sm', variant: 'ghost', onClick: load }, 'Measure again')))));
@@ -261,7 +281,7 @@ function CleanupModal({ run, onClose }) {
   h('div', { style: { fontSize: 13, lineHeight: 1.6 } },
     err ? `Could not prepare the preview: ${err}` : !plan ? 'Working out what can be removed…' : nothing ? 'Nothing to clean up: every snapshot is either live, the rollback target, or within the retention limit.'
       : h('div', null, 'These deployments are older than the retention limit. The live one and the rollback target are never removed, and any of them can be rebuilt from git:',
-        h('ul', { style: { margin: '8px 0 0 18px', padding: 0 } }, plan.snapshots.map((x) => h('li', { key: x.name, style: c.mono }, `${x.name} — ${fmtBytes(x.bytes)}`))))));
+        h('ul', { style: { margin: '8px 0 0 18px', padding: 0 } }, plan.snapshots.map((x) => h('li', { key: `${x.kind ?? 'snapshot'}-${x.name}`, style: c.mono }, `${x.kind === 'worktree' ? '(leftover trial merge) ' : ''}${x.name} — ${fmtBytes(x.bytes)}`))))));
 }
 
 /** Typed confirmation: stop tracking a plugin; the repo moves to the trash and can be moved back. */
@@ -310,7 +330,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
       p.update?.available && !p.pending && h(Tag, { tone: 'warning' }, `Update available ${p.update.target && p.update.target !== 'upstream' ? short(p.update.target) : ''}`),
       p.pending && h(Tag, { tone: 'danger' }, 'Conflict'),
       p.trustScripts && h(Tag, { tone: 'warning' }, 'Scripts always allowed')),
-    h('div', { style: { ...c.muted, marginTop: 4 } }, p.source.type === 'git' ? `git · ${tilde(p.source.url, homePath)}` : `npm · ${p.source.name}`),
+    h('div', { style: { ...c.muted, marginTop: 4 } }, h('button', { style: { ...linkButton, float: 'right' }, onClick: () => copyText(p.pending?.worktree ?? p.repo), title: p.pending?.worktree ?? p.repo, 'data-testid': `lp-path-${p.name}` }, p.pending ? 'Copy worktree path' : 'Copy repo path'), p.source.type === 'git' ? `git · ${tilde(p.source.url, homePath)}` : `npm · ${p.source.name}`),
     h('div', { style: { fontSize: 12, marginTop: 6, lineHeight: 1.6 } },
       h('span', { 'data-testid': 'lp-changed' }, `${stats.changedVsOriginal ?? '?'} file(s) changed vs original`),
       stats.uncommitted ? h('span', null, ` · ${stats.uncommitted} uncommitted`) : null,
@@ -541,7 +561,7 @@ function LocalPluginsSection({ store, ctx, close }) {
 
     h(OpPanel, { op: s.op, lastOp: s.lastOp, run, workOn, plugins: s.plugins }),
     h(HistoryPanel, { s }),
-    h(DiskPanel, { busy, run, openModal: setModal }),
+    h(DiskPanel, { busy, run, openModal: setModal, settings: s.effectiveSettings }),
 
     Object.keys(s.quarantine ?? {}).length > 0 && h('div', { style: c.banner('warn'), 'data-testid': 'lp-quarantine' },
       h('strong', null, 'Some registry entries were set aside (kept, not used): '),

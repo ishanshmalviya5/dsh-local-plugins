@@ -261,3 +261,24 @@ test('version comparison follows semver precedence', () => {
   assert.ok(compareVersions('1.2.10', '1.2.9') > 0, 'numeric, not lexical');
   assert.ok(compareVersions('1.0.0-1', '1.0.0-alpha') < 0, 'numeric identifiers sort before alphanumeric');
 });
+
+test('a merge that fails without any conflict (unrelated histories) says so, leaves local untouched, and cleans up its trial folder', async () => {
+  const origin = makeGitOrigin(w.base, 'lpm-un');
+  push(origin, 'one.js', { tag: 'v1.0.0' });
+  await w.mgr.addNew({ input: origin.url }, w.log);
+  writeFileSync(join(repo('lpm-un'), 'mine.js'), '// mine\n');
+  await w.mgr.commit({ name: 'lpm-un', message: 'mine' }, w.log);
+  const localBefore = branchSha('lpm-un', 'local');
+  // the origin replaces its whole history with an unrelated one and publishes a new release
+  g(origin.work, 'checkout', '-q', '--orphan', 'fresh');
+  writeFileSync(join(origin.work, 'package.json'), JSON.stringify({ name: 'lpm-un', version: '2.0.0', type: 'module', main: 'index.js', scripts: { build: 'true' } }));
+  writeFileSync(join(origin.work, 'index.js'), 'export const v = 2;\n');
+  g(origin.work, 'add', '-A'); g(origin.work, 'commit', '-q', '-m', 'fresh start'); g(origin.work, 'tag', 'v2.0.0');
+  g(origin.work, 'push', '-q', '--force', 'origin', 'HEAD:main'); g(origin.work, 'push', '-q', '--tags', 'origin');
+  await assert.rejects(w.mgr.update({ name: 'lpm-un', allowScripts: true }, w.log), (e) => /merge failed before it could start/.test(e.message) && /unchanged/.test(e.message) && /cleaned up/.test(e.message));
+  assert.equal(branchSha('lpm-un', 'local'), localBefore, 'your commits are exactly where they were');
+  assert.equal(reg().plugins['lpm-un'].pending, null);
+  assert.ok(!existsSync(join(w.env.workDir, 'lpm-un')), 'the trial folder is gone');
+  const branches = g(repo('lpm-un'), 'branch', '--format=%(refname:short)').split('\n');
+  assert.ok(!branches.includes('lpm-update'), 'no leftover update branch');
+});

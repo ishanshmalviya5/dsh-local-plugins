@@ -35,6 +35,10 @@ Responses are JSON. This is the contract the bundled web client uses; `apiVersio
 | `commits` | `{ name }` | `{ commits[] }` newest first (for "deploy older commit"). |
 | `agentDraft` | `{ name, mode?: "work"\|"conflict"\|"crash" }` | `{ path, text }` — a prefilled, unsent agent prompt. |
 | `op` | `{ id }` | the operation (`status`, `log`, `error`, `errorCode`, `needsTrust`, `request`, `durationMs`). |
+| `history` | — | `{ operations[] }` newest first (no logs inline; `op` returns one with its log) |
+| `diskUsage` | — | `{ plugins{ name: { repo, snapshots, snapshotCount, worktrees, backups, total } }, trash, total }` (measured on demand) |
+| `cleanupPreview` | — | `{ executed:false, snapshots[ { kind: snapshot\|worktree, name, bytes, plugin? } ], bytes }` — what `cleanup` would remove |
+| `setSettings` | `{ keepSnapshots }` | `{ keepSnapshots }` (1–20; `state.effectiveSettings` shows the value in force and whether `LPM_KEEP_SNAPSHOTS` overrides it) |
 | `dismissNotice` | `{ id }` | `{ dismissed }` |
 | `restart` | — | `{ restarting, port }`; `409 BUSY` while an operation runs. |
 
@@ -52,6 +56,8 @@ Responses are JSON. This is the contract the bundled web client uses; `apiVersio
 | `commit` | `{ name, message? }` | Commit the working tree on `local`. |
 | `setDep` | `{ name, dep, range }` | `range: null` removes the override. |
 | `trust` | `{ name, trust }` | Grant/revoke "always allow scripts". |
+| `delete` | `{ name, confirmName }` | Stop tracking a plugin: its repo moves to `.trash/`. Needs the exact name typed back; refused while applied (`NOT_UNLINKED`) or mid-update. |
+| `cleanup` | `{ execute? }` | Remove snapshots beyond retention and leftover trial-merge folders (preview with `cleanupPreview`). Never the live one or the rollback target. |
 | `repair` | — | Recover interrupted operations, sweep stale files, reconcile registry ↔ disk ↔ git. Safe to repeat. |
 | `reapplyAll` | — | After a dsh upgrade: check, merge clean updates, re-link. |
 

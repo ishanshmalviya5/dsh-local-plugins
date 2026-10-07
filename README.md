@@ -19,7 +19,7 @@ Keep the dsh plugins you have edited — third-party plugins **and** built-in `@
 * **dsh upgrades handled:** after an upgrade resets links, plugins show *Reapply required*, never "active"; *Reapply all* is safe to repeat.
 * **Origins:** npm (`name`, `name@1.2.3`, `name@tag`) and git (newest release tag, or pin `url#tag`, `#branch`, `#commit`).
 * **Repair installation**, **Recent operations** (logs, durations, retry), **Disk usage** and a safe **Clean up**, **Unlink** (restore the original) and **Delete local plugin** (repo moves to a recoverable trash).
-* **Agent buttons** (*Work on it*, *Fix with agent*) open a dsh session in the repo or the conflicted worktree with a prefilled, unsent prompt that treats repository text as data and forbids touching the live install.
+* **Agent buttons** (*Work on it*, *Fix with agent*) open a dsh session in **Creator mode** in the repo or the conflicted worktree, with a prefilled, unsent prompt that treats repository text as data, works only through git, and forbids touching the live install or bypassing the manager.
 
 ## Install
 

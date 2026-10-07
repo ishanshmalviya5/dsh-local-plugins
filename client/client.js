@@ -36,6 +36,7 @@ var inject = ["slots", "remote", "remote.agentPresets"];
 var API = "/local-plugins-api";
 var SECTION_ID = "local-plugins";
 var SECTION_LABEL = "Local Plugins";
+var AGENT_PRESET = "cordis";
 async function call(action, body = {}, { timeoutMs = 15e3 } = {}) {
   const res = await fetch(`${API}/${action}`, {
     method: "POST",
@@ -115,11 +116,14 @@ async function openAgentSession(ctx, { path, text }) {
   const sessions = ctx.get("sessions");
   const ws = await workspaces.create({ path });
   const sid = await sessions.create({ workspaceId: ws.workspaceId });
-  try {
-    const r = await ctx.remote.agentPresets.select(sid, "standard");
-    if (r && r.ok === false) console.warn("[dsh-local-plugins] preset select refused", r.error);
-  } catch (err) {
-    console.warn("[dsh-local-plugins] preset select failed", err);
+  for (const preset of [AGENT_PRESET, "standard"]) {
+    try {
+      const r = await ctx.remote.agentPresets.select(sid, preset);
+      if (!r || r.ok !== false) break;
+      console.warn(`[dsh-local-plugins] preset "${preset}" refused`, r.error);
+    } catch (err) {
+      console.warn(`[dsh-local-plugins] preset "${preset}" failed`, err);
+    }
   }
   ctx.get("uiWorkspace").openSession(sid);
   ctx.get("conversation").input.for(sessions.scope(sid)).setDraft(text);
@@ -199,7 +203,10 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
   const label = `${shown.kind}${shown.target ? ` ${shown.target}` : ""}`;
   const elapsed = running ? Date.now() - shown.startedAt : shown.durationMs ?? 0;
   const lastLine = shown.log.length ? shown.log[shown.log.length - 1] : "";
-  const exists = plugins.some((p) => p.name === shown.target);
+  const plugin = plugins.find((p) => p.name === shown.target);
+  const exists = Boolean(plugin);
+  const pathToCopy = plugin?.pending?.worktree ?? plugin?.repo ?? null;
+  const pathLabel = plugin?.pending ? "Copy worktree path" : "Copy repo path";
   const canRetry = failed && shown.request && !shown.needsTrust && shown.errorCode !== "BUSY";
   const logBox = (open || running) && (0, import_react.createElement)("pre", { ref, style: c.pre }, shown.log.slice(-200).join("\n"));
   const logButtons = [
@@ -249,6 +256,10 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
       exists && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", onClick: () => workOn(shown.target, shown.request?.action === "finish" ? "conflict" : "work") }, "Work on it"),
       logButtons[0],
       logButtons[1],
+      pathToCopy && (0, import_react.createElement)("button", { style: linkButton, onClick: async () => {
+        setCopied(await copyText(pathToCopy));
+        setTimeout(() => setCopied(false), 1500);
+      }, title: pathToCopy, "data-testid": "lp-copy-path" }, pathLabel),
       (0, import_react.createElement)("span", { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` \xB7 ${shown.errorCode}` : ""}`)
     ),
     logBox
@@ -290,8 +301,10 @@ function HistoryPanel({ s }) {
 ` : ""}${full.log.join("\n")}`)
   );
 }
-function DiskPanel({ busy, run, openModal }) {
+function DiskPanel({ busy, run, openModal, settings }) {
   const [open, setOpen] = (0, import_react.useState)(false);
+  const [keep, setKeep] = (0, import_react.useState)(null);
+  const [saved, setSaved] = (0, import_react.useState)(null);
   const [data, setData] = (0, import_react.useState)(null);
   const [err, setErr] = (0, import_react.useState)(null);
   async function load() {
@@ -328,6 +341,26 @@ function DiskPanel({ busy, run, openModal }) {
           { style: { ...c.row, justifyContent: "space-between", marginTop: 8, fontSize: 13 } },
           (0, import_react.createElement)("strong", null, `Total ${fmtBytes(data.total)}`),
           (0, import_react.createElement)("span", { style: c.muted }, `trash ${fmtBytes(data.trash)}`)
+        ),
+        settings && (0, import_react.createElement)(
+          "div",
+          { style: { ...c.row, marginTop: 10, fontSize: 13 }, "data-testid": "lp-retention" },
+          (0, import_react.createElement)("span", null, "Keep"),
+          (0, import_react.createElement)("input", { type: "number", min: 1, max: 20, style: { ...c.input, width: 64 }, disabled: settings.keepFromEnv, value: keep ?? settings.keepSnapshots, onChange: (e) => {
+            setKeep(e.target.value);
+            setSaved(null);
+          }, "data-testid": "lp-keep-input" }),
+          (0, import_react.createElement)("span", null, "deployments per plugin"),
+          (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: settings.keepFromEnv || keep == null || Number(keep) === settings.keepSnapshots, onClick: async () => {
+            try {
+              await call("setSettings", { keepSnapshots: Number(keep) });
+              setSaved("Saved");
+            } catch (e) {
+              setSaved(e.message);
+            }
+          } }, "Save"),
+          saved && (0, import_react.createElement)("span", { style: c.muted }, saved),
+          (0, import_react.createElement)("div", { style: { ...c.muted, width: "100%" } }, settings.keepFromEnv ? "Set by the LPM_KEEP_SNAPSHOTS environment variable, which overrides this." : "The live deployment and the one you can roll back to are always kept, whatever this says.")
         ),
         (0, import_react.createElement)(
           "div",
@@ -370,7 +403,7 @@ function CleanupModal({ run, onClose }) {
         "div",
         null,
         "These deployments are older than the retention limit. The live one and the rollback target are never removed, and any of them can be rebuilt from git:",
-        (0, import_react.createElement)("ul", { style: { margin: "8px 0 0 18px", padding: 0 } }, plan.snapshots.map((x) => (0, import_react.createElement)("li", { key: x.name, style: c.mono }, `${x.name} \u2014 ${fmtBytes(x.bytes)}`)))
+        (0, import_react.createElement)("ul", { style: { margin: "8px 0 0 18px", padding: 0 } }, plan.snapshots.map((x) => (0, import_react.createElement)("li", { key: `${x.kind ?? "snapshot"}-${x.name}`, style: c.mono }, `${x.kind === "worktree" ? "(leftover trial merge) " : ""}${x.name} \u2014 ${fmtBytes(x.bytes)}`)))
       )
     )
   );
@@ -437,7 +470,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
       p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "danger" }, "Conflict"),
       p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, "Scripts always allowed")
     ),
-    (0, import_react.createElement)("div", { style: { ...c.muted, marginTop: 4 } }, p.source.type === "git" ? `git \xB7 ${tilde(p.source.url, homePath)}` : `npm \xB7 ${p.source.name}`),
+    (0, import_react.createElement)("div", { style: { ...c.muted, marginTop: 4 } }, (0, import_react.createElement)("button", { style: { ...linkButton, float: "right" }, onClick: () => copyText(p.pending?.worktree ?? p.repo), title: p.pending?.worktree ?? p.repo, "data-testid": `lp-path-${p.name}` }, p.pending ? "Copy worktree path" : "Copy repo path"), p.source.type === "git" ? `git \xB7 ${tilde(p.source.url, homePath)}` : `npm \xB7 ${p.source.name}`),
     (0, import_react.createElement)(
       "div",
       { style: { fontSize: 12, marginTop: 6, lineHeight: 1.6 } },
@@ -788,7 +821,7 @@ function LocalPluginsSection({ store, ctx, close }) {
     )),
     (0, import_react.createElement)(OpPanel, { op: s.op, lastOp: s.lastOp, run, workOn, plugins: s.plugins }),
     (0, import_react.createElement)(HistoryPanel, { s }),
-    (0, import_react.createElement)(DiskPanel, { busy, run, openModal: setModal }),
+    (0, import_react.createElement)(DiskPanel, { busy, run, openModal: setModal, settings: s.effectiveSettings }),
     Object.keys(s.quarantine ?? {}).length > 0 && (0, import_react.createElement)(
       "div",
       { style: c.banner("warn"), "data-testid": "lp-quarantine" },

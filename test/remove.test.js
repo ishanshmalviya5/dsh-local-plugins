@@ -149,3 +149,54 @@ test('every failure answers: what happened, is it safe, what next — for every 
   assert.match(adviceFor({ action: 'apply', code: null }).safe, /previous deployment/);
   assert.match(adviceFor({ action: 'update', code: 'ORIGIN_UNREACHABLE' }).safe, /unchanged/);
 });
+
+test('the operation log records which commit and snapshot an Apply produced', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const logFile = join(mkdtempSync(join(tmpdir(), 'lpm-oplog-')), 'ops.jsonl');
+  const ops = createOps({ logFile });
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await edit('lpm-npm');
+  const op = ops.start('apply', 'lpm-npm', (log) => w.mgr.apply({ name: 'lpm-npm' }, log), { action: 'apply', body: { name: 'lpm-npm' } });
+  await op.promise;
+  const line = JSON.parse(readFileSync(logFile, 'utf8').trim().split('\n').at(-1));
+  assert.equal(line.action, 'apply');
+  assert.equal(line.commit, reg().plugins['lpm-npm'].deployedSha);
+  assert.equal(line.snapshot, `lpm-npm@${line.commit.slice(0, 12)}`);
+  assert.equal(line.status, 'ok');
+});
+
+test('leftover trial-merge folders are reported, listed in the cleanup preview, and removed only on confirmation; an owned one is never touched', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  mkdirSync(join(w.env.workDir, 'stray'), { recursive: true });
+  writeFileSync(join(w.env.workDir, 'stray', 'half.txt'), 'x');
+  const owned = join(w.env.workDir, 'lpm-npm'); mkdirSync(owned, { recursive: true }); writeFileSync(join(owned, 'conflict.txt'), 'keep');
+  const r = reg(); r.plugins['lpm-npm'].pending = { worktree: owned, branch: 'lpm-update', conflicts: ['conflict.txt'], target: '2' };
+  (await import('../lib/registry.js')).saveRegistry(w.env.registryFile, r);
+
+  const issues = (await w.mgr.state(null)).issues;
+  assert.ok(issues.some((i) => i.code === 'ORPHAN_WORKTREE' && /stray/.test(i.message) && i.severity === 'info'));
+  assert.ok(!issues.some((i) => /\.work\/lpm-npm/.test(i.message ?? '')), 'the one an update owns is not reported');
+
+  const preview = await w.mgr.cleanup({}, w.log);
+  const row = preview.snapshots.find((x) => x.kind === 'worktree');
+  assert.deepEqual([row.name, preview.snapshots.length], ['stray', 1]);
+  assert.ok(existsSync(join(w.env.workDir, 'stray')), 'a preview removes nothing');
+
+  await w.mgr.cleanup({ execute: true }, w.log);
+  assert.ok(!existsSync(join(w.env.workDir, 'stray')));
+  assert.equal(readFileSync(join(owned, 'conflict.txt'), 'utf8'), 'keep', 'the pending update worktree is untouched');
+  assert.equal((await w.mgr.cleanup({}, w.log)).snapshots.length, 0, 'idempotent');
+});
+
+test('the retention setting is validated, saved, shown as effective, and overridden by the environment variable', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  assert.deepEqual((await w.mgr.state(null)).effectiveSettings, { keepSnapshots: 3, keepFromEnv: false });
+  assert.deepEqual(w.mgr.setSettings({ keepSnapshots: 5 }), { keepSnapshots: 5 });
+  assert.equal(reg().settings.keepSnapshots, 5);
+  assert.deepEqual((await w.mgr.state(null)).effectiveSettings, { keepSnapshots: 5, keepFromEnv: false });
+  for (const bad of [0, 21, 2.5, 'x', null, undefined, -1]) assert.throws(() => w.mgr.setSettings({ keepSnapshots: bad }), (e) => e.status === 400 && /between 1 and 20/.test(e.message), String(bad));
+  assert.equal(reg().settings.keepSnapshots, 5, 'rejected values change nothing');
+  process.env.LPM_KEEP_SNAPSHOTS = '2';
+  assert.deepEqual((await w.mgr.state(null)).effectiveSettings, { keepSnapshots: 2, keepFromEnv: true });
+});
