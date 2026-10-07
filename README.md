@@ -105,7 +105,7 @@ For npm plugins: `name`, `name@1.2.3` or `name@beta`. For plugins from git: a we
 
 How this is guaranteed: [Security](docs/security.md) · [Recovery](docs/recovery.md) · [How it works](docs/architecture.md).
 
-## Compatibility
+## Compatibility — dsh-local-plugins 0.2.0
 
 | Where | Status |
 |---|---|
