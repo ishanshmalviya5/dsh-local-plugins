@@ -299,10 +299,6 @@ await scenario(13, 'Restart from the API returns on :3091', async () => {
 });
 
 writeFileSync(fileURLToPath(new URL('./api-results.json', import.meta.url)), `${JSON.stringify(results, null, 2)}\n`);
-const failed = results.filter((r) => r.status === 'fail');
-console.log(`\n${results.length - failed.length}/${results.length} scenarios passed`);
-process.exit(failed.length ? 1 : 0);
-
 // ---------- v0.2 ----------
 await scenario(14, 'v0.2: API contract, permission prompt, states, repair, registry v2', async () => {
   const s = await state();
@@ -333,3 +329,8 @@ await scenario(14, 'v0.2: API contract, permission prompt, states, repair, regis
   check(busy === null || busy.code === 'BUSY', `second request while running -> ${busy?.code ?? 'finished already'}`);
   for (;;) { const o = await call('op', { id: first.opId }); if (o.status !== 'running') break; await sleep(200); }
 });
+
+const failed = results.filter((r) => r.status === 'fail');
+console.log(`\n${results.length - failed.length}/${results.length} scenarios passed`);
+process.exit(failed.length ? 1 : 0);
+
