@@ -465,9 +465,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
       { style: c.row },
       (0, import_react.createElement)("strong", { style: { fontSize: 14 } }, p.name),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: p.kind === "core" ? "info" : "outline" }, p.kind === "core" ? "core" : "third-party"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: st ? STATUS_TONE[st.id] ?? tone : tone }, st ? st.label : state),
-      p.update?.available && !p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, `Update available ${p.update.target && p.update.target !== "upstream" ? short(p.update.target) : ""}`),
-      p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "danger" }, "Conflict"),
+      (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: st ? STATUS_TONE[st.id] ?? tone : tone }, st ? `${st.label}${st.id === "UPDATE_AVAILABLE" && p.update?.target && p.update.target !== "upstream" ? ` ${short(p.update.target)}` : ""}` : state),
       p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, "Scripts always allowed")
     ),
     (0, import_react.createElement)("div", { style: { ...c.muted, marginTop: 4 } }, (0, import_react.createElement)("button", { style: { ...linkButton, float: "right" }, onClick: () => copyText(p.pending?.worktree ?? p.repo), title: p.pending?.worktree ?? p.repo, "data-testid": `lp-path-${p.name}` }, p.pending ? "Copy worktree path" : "Copy repo path"), p.source.type === "git" ? `git \xB7 ${tilde(p.source.url, homePath)}` : `npm \xB7 ${p.source.name}`),

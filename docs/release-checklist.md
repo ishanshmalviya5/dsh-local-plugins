@@ -56,16 +56,16 @@ Status is what has actually been demonstrated, not what is intended. **Shown** =
 | README updated | Done | compatibility table, limits, links; the validator fails if the version row is missing |
 | Changelog written | Done | `CHANGELOG.md` (the lint fails without a section for the current version) |
 | Package contents audited | Shown | allow-list + no tests/handoff/conversation/keys/local paths/e-mails (`check:package`) |
-| **CI green** | **Not shown** | workflows are written (`.github/workflows`) but nothing has been pushed; they have never run |
-| Linux / Node ≠ 26 | **Not shown** | declared experimental until CI proves them |
+| **CI green** | **Shown** | the CI run on pull request #2 ([run 37631766848](https://github.com/ishanshmalviya5/dsh-local-plugins/actions/runs/37631766848)): macOS + Node 26 (the required job), Ubuntu + Node 22 / 24 / 26 and the dependency audit all passed. Its first run found one real defect in the package validator (it treated the CI account name `runner` as a private word); fixed and pinned by `test/private-terms.test.js` |
+| Linux, Node 22 / 24 / 26 | **Partly shown** | lint, all unit tests and package validation pass on Ubuntu in CI. An end-to-end run against a real dsh on Linux has not been done, and Node 22 / 24 are outside the declared `engines` (>= 26) |
 
 ## Definition of done — the three invariants
 1. *At every crash point the user has the previous or the new valid deployment, and the system can detect and recover everything between.* — fault-injection matrix + journal recovery + `repair`.
 2. *Registry, git, filesystem and the dsh install never silently disagree.* — `reconcile` (see [recovery.md](recovery.md)), adoption of v0.1 deployments, `state().issues` shown on every card.
 3. *No operation silently destroys committed work or the original dsh installation.* — originals go to `.backup`, deleted repos to `.trash`, user work to stash + rescue branch before any revert, `local` is never rewritten, tamper-proof path checks.
 
-## Before publishing (human steps)
-* Push the branch under the personal GitHub account and let CI run; the *required* job is macOS + Node 26.
-* Decide whether Linux/Node 22–24 results justify widening the compatibility table (edit README, `engines`, `os`).
-* Run `npm run test:e2e` once more against a freshly built isolated dsh.
-* Read `npm pack` output; `npm publish` yourself.
+## Remaining human steps
+Done: the branch is merged and CI is green.
+* Tag `v0.2.0` (the tag triggers the release-check workflow, which re-runs everything and attaches the package).
+* Decide whether the Linux / Node 22–24 results justify widening the compatibility table (README, `engines`, `os`), ideally after an end-to-end run on a Linux machine.
+* Read the `npm pack` file list; `npm publish` yourself if you want it on npm.

@@ -11,7 +11,7 @@ npm run test:e2e       # scenarios against an isolated live dsh (see below)
 npm run bench          # performance numbers (docs/performance.md)
 ```
 
-Requirements: Node >= 26, `git` and `npm` on `PATH`, macOS or Linux. Tested by the maintainer: macOS (arm64), Node 26.8. CI also runs Linux and Node 22/24 as *experimental* (see the compatibility table in the README).
+Requirements: Node >= 26, `git` and `npm` on `PATH`, macOS or Linux. Tested by the maintainer: macOS (arm64), Node 26.8, including the end-to-end suite. CI runs lint, the unit tests and package validation on macOS + Node 26 (required) and on Ubuntu with Node 22 / 24 / 26 (experimental jobs: they pass today, but those combinations are outside the declared support; see the compatibility table in the README).
 
 ## Tests
 

@@ -58,7 +58,7 @@ try {
   if (m.dsh?.manifestVersion !== 1 || m.dsh?.client?.platform !== 'web') bad('the dsh manifest is missing or wrong');
   const changelog = readFileSync(join(ex, 'package', 'CHANGELOG.md'), 'utf8');
   if (!changelog.includes(`## ${m.version}`)) bad(`CHANGELOG has no section for ${m.version}`);
-  if (!new RegExp(`^\\| ${m.version.replace(/\./g, '\\.')} \\|`, 'm').test(readFileSync(join(ex, 'package', 'README.md'), 'utf8'))) bad(`README's compatibility table has no row for version ${m.version}`);
+  if (!new RegExp(`^## Compatibility.*\\b${m.version.replace(/\./g, '\\.')}\\b`, 'm').test(readFileSync(join(ex, 'package', 'README.md'), 'utf8'))) bad(`README's "Compatibility" heading does not name version ${m.version} (e.g. "## Compatibility — dsh-local-plugins ${m.version}")`);
   for (const t of Object.values(m.exports).filter((v) => typeof v === 'string')) if (!existsSync(join(ex, 'package', t))) bad(`export ${t} is missing from the package`);
   if (m.dependencies && Object.keys(m.dependencies).length) bad(`runtime dependencies were added (${Object.keys(m.dependencies).join(', ')}); this package promises none`);
   ok(`manifest: version ${m.version}, dsh manifest 1, exports resolve, no runtime dependencies, changelog + README current`);
