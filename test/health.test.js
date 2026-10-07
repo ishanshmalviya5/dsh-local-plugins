@@ -129,7 +129,7 @@ test('state machine: states follow events, and illegal actions are refused with 
   assert.equal((await st()).primary, 'apply');
 
   const r = reg();
-  r.plugins['lpm-npm'].pending = { worktree: '/x', branch: 'b', conflicts: ['a.js'], target: '2' };
+  r.plugins['lpm-npm'].pending = { worktree: join(w.env.workDir, 'x'), branch: 'b', conflicts: ['a.js'], target: '2' };
   (await import('../lib/registry.js')).saveRegistry(w.env.registryFile, r);
   assert.equal((await st()).id, 'CONFLICT');
   for (const action of ['apply', 'restore', 'update', 'commit']) {
