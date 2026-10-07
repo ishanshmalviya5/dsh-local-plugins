@@ -222,9 +222,11 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
     return (0, import_react.createElement)(
       "div",
       { style: { ...c.muted, marginTop: 10 }, "data-testid": "lp-op" },
-      `\u2714 ${label} \u2014 done in ${fmtDur(elapsed)} `,
-      ...logButtons,
-      " ",
+      `\u2714 ${label} \u2014 done in ${fmtDur(elapsed)} \xB7 `,
+      logButtons[0],
+      " \xB7 ",
+      logButtons[1],
+      " \xB7 ",
       (0, import_react.createElement)("button", { style: linkButton, onClick: () => setDismissed(shown.id) }, "dismiss"),
       logBox
     );
@@ -245,7 +247,8 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
       { style: { ...c.row, marginTop: 8 } },
       canRetry && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", onClick: () => run(shown.request.action, shown.request.body) }, "Retry"),
       exists && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", onClick: () => workOn(shown.target, shown.request?.action === "finish" ? "conflict" : "work") }, "Work on it"),
-      ...logButtons,
+      logButtons[0],
+      logButtons[1],
       (0, import_react.createElement)("span", { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` \xB7 ${shown.errorCode}` : ""}`)
     ),
     logBox
@@ -770,7 +773,7 @@ function LocalPluginsSection({ store, ctx, close }) {
     ),
     (s.notices ?? []).map((n) => (0, import_react.createElement)(
       "div",
-      { key: n.id, style: c.banner(n.kind === "crash-recovery" ? "warn" : "error"), "data-testid": "lp-notice" },
+      { key: n.id, style: c.banner(n.kind === "info" ? "info" : n.kind === "crash-recovery" ? "warn" : "error"), "data-testid": "lp-notice" },
       (0, import_react.createElement)("div", null, (0, import_react.createElement)("strong", null, n.title)),
       (0, import_react.createElement)("div", { style: { marginTop: 4, fontSize: 12, lineHeight: 1.5 } }, n.message),
       (0, import_react.createElement)(

@@ -330,6 +330,25 @@ await scenario(14, 'v0.2: API contract, permission prompt, states, repair, regis
   for (;;) { const o = await call('op', { id: first.opId }); if (o.status !== 'running') break; await sleep(200); }
 });
 
+await scenario(15, 'v0.2: disk usage, cleanup preview, history, guarded Delete', async () => {
+  const s = await state();
+  const du = await call('diskUsage', {});
+  check(Object.keys(du.plugins).length === s.plugins.length && du.total >= 0, `disk usage lists ${Object.keys(du.plugins).length} plugin(s), total ${du.total} bytes`);
+  const first = Object.values(du.plugins)[0];
+  check(first.total === first.repo + first.snapshots + first.worktrees + first.backups, 'per-plugin total adds up');
+  const preview = await call('cleanupPreview', {});
+  check(preview.executed === false && Array.isArray(preview.snapshots), `cleanup preview: ${preview.snapshots.length} snapshot(s), nothing removed`);
+  const h = await call('history', {});
+  check(h.operations.length > 0 && h.operations[0].log === undefined, `history: ${h.operations.length} operation(s), no logs inline`);
+  const applied = s.plugins.find((p) => p.applied);
+  let err = null;
+  try { await op('delete', { name: applied.name, confirmName: 'wrong' }); } catch (e) { err = e; }
+  const o = await op('delete', { name: applied.name, confirmName: applied.name });
+  check(o.status === 'error' && o.errorCode === 'NOT_UNLINKED', `${applied.name}: delete while applied -> ${o.errorCode}`);
+  check(o.advice?.safe && o.advice?.next && o.title === 'Delete failed', 'the failure carries a title, "is it safe" and "what next"');
+  void err;
+});
+
 const failed = results.filter((r) => r.status === 'fail');
 console.log(`\n${results.length - failed.length}/${results.length} scenarios passed`);
 process.exit(failed.length ? 1 : 0);

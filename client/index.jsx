@@ -186,7 +186,7 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
   }
   if (!failed) {
     return h('div', { style: { ...c.muted, marginTop: 10 }, 'data-testid': 'lp-op' },
-      `✔ ${label} — done in ${fmtDur(elapsed)} `, ...logButtons, ' ', h('button', { style: linkButton, onClick: () => setDismissed(shown.id) }, 'dismiss'), logBox);
+      `✔ ${label} — done in ${fmtDur(elapsed)} · `, logButtons[0], ' · ', logButtons[1], ' · ', h('button', { style: linkButton, onClick: () => setDismissed(shown.id) }, 'dismiss'), logBox);
   }
   return h('div', { style: c.banner('error'), 'data-testid': 'lp-op' },
     h('div', { style: c.row }, h('strong', null, `✖ ${shown.title ?? 'Failed'}`), shown.target && h('span', { style: c.muted }, shown.target), h('button', { style: { ...linkButton, marginLeft: 'auto' }, onClick: () => setDismissed(shown.id) }, 'dismiss')),
@@ -197,7 +197,7 @@ function OpPanel({ op, lastOp, run, workOn, plugins }) {
     h('div', { style: { ...c.row, marginTop: 8 } },
       canRetry && h(Button, { size: 'sm', variant: 'primary', onClick: () => run(shown.request.action, shown.request.body) }, 'Retry'),
       exists && h(Button, { size: 'sm', variant: 'outline', onClick: () => workOn(shown.target, shown.request?.action === 'finish' ? 'conflict' : 'work') }, 'Work on it'),
-      ...logButtons, h('span', { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` · ${shown.errorCode}` : ''}`)),
+      logButtons[0], logButtons[1], h('span', { style: c.muted }, `${fmtDur(elapsed)}${shown.errorCode ? ` · ${shown.errorCode}` : ''}`)),
     logBox);
 }
 
@@ -533,7 +533,7 @@ function LocalPluginsSection({ store, ctx, close }) {
       h('strong', null, 'The plugin registry cannot be read. '), s.registryError.message,
       s.registryError.code !== 'REGISTRY_TOO_NEW' && h('div', { style: { marginTop: 8 } }, h(Button, { size: 'sm', variant: 'primary', disabled: busy, onClick: () => run('repair', {}) }, 'Repair installation'))),
 
-    (s.notices ?? []).map((n) => h('div', { key: n.id, style: c.banner(n.kind === 'crash-recovery' ? 'warn' : 'error'), 'data-testid': 'lp-notice' },
+    (s.notices ?? []).map((n) => h('div', { key: n.id, style: c.banner(n.kind === 'info' ? 'info' : n.kind === 'crash-recovery' ? 'warn' : 'error'), 'data-testid': 'lp-notice' },
       h('div', null, h('strong', null, n.title)),
       h('div', { style: { marginTop: 4, fontSize: 12, lineHeight: 1.5 } }, n.message),
       h('div', { style: { ...c.row, marginTop: 6 } },
