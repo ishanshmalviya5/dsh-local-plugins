@@ -63,6 +63,7 @@ export function makeWorld() {
   const dshHome = join(base, 'home');
   const fixtures = join(base, 'fixtures');
   process.env.LPM_NPM_FIXTURES = fixtures;
+  process.env.LPM_NPM_OFFLINE = '1'; // a package without fixtures is simply "not on npm": no network in unit tests
   process.env.DSH_HOME = dshHome;
 
   // fake dsh install, flat layout like `npm install --prefix`
