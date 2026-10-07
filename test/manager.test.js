@@ -86,7 +86,7 @@ test('commit-only rule: uncommitted edits never reach the live snapshot; Apply d
   assert.match(readFileSync(join(live(CORE), 'lib/index.js'), 'utf8'), /v = 3/);
 });
 
-test('profile plugin: migrate from npm, apply links the profile to the stable link, restore installs latest', async () => {
+test('profile plugin: migrate from npm, apply links the profile to the stable link, restore reinstalls the original spec', async () => {
   await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
   await w.mgr.apply({ name: 'lpm-npm' }, w.log);
   const pkg = JSON.parse(readFileSync(join(w.profileDir, 'package.json'), 'utf8'));
@@ -96,7 +96,7 @@ test('profile plugin: migrate from npm, apply links the profile to the stable li
 
   await w.mgr.restore({ name: 'lpm-npm' }, w.log);
   const after = JSON.parse(readFileSync(join(w.profileDir, 'package.json'), 'utf8'));
-  assert.equal(after.dependencies['lpm-npm'], 'latest');
+  assert.equal(after.dependencies['lpm-npm'], '^1.0.0', 'the spec the profile had, not @latest');
   assert.equal(reg().plugins['lpm-npm'].applied, false);
   assert.ok(existsSync(w.env.stableLink('lpm-npm')), 'snapshots kept for a fast re-apply');
 });

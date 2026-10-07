@@ -208,3 +208,30 @@ test('always-allow is tied to the approved publisher', async () => {
   await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /permission/);
   assert.ok(w.logs.some((l) => /publisher is now unknown \(you allowed alice\)/.test(l)));
 });
+
+test('Restore original reinstalls exactly the original spec (range, pin, tag, git) and only falls back to latest when there was none', async () => {
+  const { restoreSpec } = await import('../lib/link.js');
+  const spec = (originalSpec) => restoreSpec({ name: 'p', originalSpec });
+  assert.equal(spec('^1.2.0'), 'p@^1.2.0');
+  assert.equal(spec('~1.2'), 'p@~1.2');
+  assert.equal(spec('1.2.3'), 'p@1.2.3');
+  assert.equal(spec('beta'), 'p@beta');
+  assert.equal(spec('github:me/p'), 'p@github:me/p');
+  assert.equal(spec('git+https://example.com/p.git'), 'p@git+https://example.com/p.git');
+  assert.equal(spec('npm:other@2'), 'p@npm:other@2');
+  assert.equal(spec(undefined), 'p@latest');
+  assert.equal(spec(''), 'p@latest');
+  assert.equal(spec('link:/somewhere'), 'p@latest');
+
+  // end to end: an exact pin survives apply + restore
+  const r = loadRegistry(w.env.registryFile);
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  const reg2 = loadRegistry(w.env.registryFile);
+  reg2.plugins['lpm-npm'].originalSpec = '1.0.0';
+  saveRegistry(w.env.registryFile, reg2);
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);
+  await w.mgr.restore({ name: 'lpm-npm' }, w.log);
+  const pkg = JSON.parse(readFileSync(join(w.profileDir, 'package.json'), 'utf8'));
+  assert.equal(pkg.dependencies['lpm-npm'], '1.0.0');
+  assert.equal(r.plugins['lpm-npm'], undefined);
+});
