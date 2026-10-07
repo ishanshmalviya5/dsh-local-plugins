@@ -215,8 +215,10 @@ test('an unfinished snapshot is swept, but a live one is only reported', async (
   await w.mgr.apply({ name: 'lpm-npm' }, w.log);
   const live = liveSnap('lpm-npm');
   rmSync(join(live, '.lpm-ready'));
+  writeFileSync(join(live, 'index.js'), 'export const = ;\n'); // not provably the deployed code: must not be adopted
   const r = await w.mgr.repair(w.log);
   assert.ok(existsSync(live), 'live snapshot is never deleted');
+  assert.deepEqual(r.adopted, [], 'a snapshot that fails the load check is not adopted');
   assert.ok(r.issues.some((i) => i.code === 'SNAPSHOT_UNFINISHED' && i.plugin === 'lpm-npm'));
 });
 
