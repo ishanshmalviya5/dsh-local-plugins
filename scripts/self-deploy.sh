@@ -17,6 +17,8 @@ if [ -n "$(git -C "$REPO" status --porcelain)" ]; then echo "note: uncommitted c
 mkdir -p "$DEPLOYED"
 git -C "$REPO" worktree prune
 if [ ! -d "$SNAP" ]; then git -C "$REPO" worktree add -q --detach "$SNAP" "$SHA"; fi
+# the "finished" marker the manager itself writes for snapshots it builds (startup recovery trusts only marked ones)
+printf '%s\n' "$SHA" > "$SNAP/.lpm-ready"
 ln -s "$SNAP" "$STABLE.tmp.$$" && node -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$STABLE.tmp.$$" "$STABLE"
 echo "live -> $(basename "$SNAP")"
 

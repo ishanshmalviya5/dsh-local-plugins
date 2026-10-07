@@ -315,3 +315,26 @@ test('a corrupt registry is kept aside and rebuilt from the repos; nothing is ap
   await w.mgr.apply({ name: 'lpm-npm' }, w.log);               // and it is usable again
   assert.equal(reg().plugins['lpm-npm'].applied, true);
 });
+
+test('the startup sweep never deletes a snapshot that is linked, or one that belongs to nothing it tracks', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await newCommit('lpm-npm');
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);
+  // the manager's own deployment (made by scripts/self-deploy.sh): not a tracked plugin, no marker
+  const own = join(w.env.deployedDir, 'dsh-local-plugins@abc123abc123');
+  mkdirSync(own, { recursive: true }); writeFileSync(join(own, 'marker.txt'), 'x');
+  symlinkSync(own, join(w.env.deployedDir, 'dsh-local-plugins'));
+  // an old snapshot of a tracked plugin that predates markers but is linked: also live
+  const live = liveSnap('lpm-npm');
+  rmSync(join(live, '.lpm-ready'));
+  // an unrelated unfinished directory with no owner
+  const stray = join(w.env.deployedDir, 'something-else@000000000000'); mkdirSync(stray);
+  // and a real leftover of a tracked plugin: unfinished, not linked -> this one IS swept
+  const junkDir = join(w.env.deployedDir, 'lpm-npm@ffffffffffff'); mkdirSync(junkDir); writeFileSync(join(junkDir, 'half'), 'x');
+  const r = await w.mgr.repair(w.log);
+  assert.ok(existsSync(join(own, 'marker.txt')), "the manager's own snapshot survives");
+  assert.ok(existsSync(live), 'a linked snapshot survives even without a marker');
+  assert.ok(existsSync(stray), 'a directory that belongs to no tracked plugin is left alone');
+  assert.ok(!existsSync(junkDir), 'an unfinished, unlinked snapshot of a tracked plugin is cleaned up');
+  assert.ok(r.swept.some((x) => /ffffffffffff/.test(x)));
+});

@@ -41,12 +41,14 @@ async function call(action, body = {}) {
   const res = await fetch(`${BASE}/local-plugins-api/${action}`, {
     method: 'POST', headers: { 'content-type': 'application/json', origin: BASE, cookie }, body: JSON.stringify(body),
   });
-  const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
-  if (!data.ok) throw new Error(`${action}: ${data.error}`);
+  const data = await res.json().catch(() => ({ ok: false, error: { code: 'HTTP', message: `HTTP ${res.status}` } }));
+  if (!data.ok) throw Object.assign(new Error(`${action}: ${data.error?.message ?? data.error}`), { code: data.error?.code, details: data.error?.details });
   return data.value;
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function op(action, body) {
+async function op(action, body = {}) {
+  // the fixture plugins build from source, which needs script permission (scenario 14 checks the prompt itself)
+  if (['apply', 'update', 'finish'].includes(action) && body.allowScripts === undefined) body = { ...body, allowScripts: true };
   const { opId } = await call(action, body);
   for (;;) {
     const o = await call('op', { id: opId });
@@ -300,3 +302,34 @@ writeFileSync(fileURLToPath(new URL('./api-results.json', import.meta.url)), `${
 const failed = results.filter((r) => r.status === 'fail');
 console.log(`\n${results.length - failed.length}/${results.length} scenarios passed`);
 process.exit(failed.length ? 1 : 0);
+
+// ---------- v0.2 ----------
+await scenario(14, 'v0.2: API contract, permission prompt, states, repair, registry v2', async () => {
+  const s = await state();
+  check(s.apiVersion === 2, `apiVersion ${s.apiVersion}`);
+  check(s.plugins.every((p) => p.status && typeof p.status.id === 'string'), 'every plugin has a state: ' + s.plugins.map((p) => `${p.name}=${p.status.id}`).join(', '));
+  const reg = JSON.parse(readFileSync(join(ROOT, 'registry.json'), 'utf8'));
+  check(reg.version === 2, `registry migrated to version ${reg.version}`);
+  // error shape + content type + method
+  const bad = await fetch(`${BASE}/local-plugins-api/nope`, { method: 'POST', headers: { 'content-type': 'application/json', origin: BASE, cookie }, body: '{}' });
+  const bj = await bad.json();
+  check(bad.status === 404 && bj.error?.code === 'NOT_FOUND', `unknown action -> ${bad.status} ${bj.error?.code}`);
+  const wrongType = await fetch(`${BASE}/local-plugins-api/state`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: BASE, cookie }, body: '{}' });
+  check(wrongType.status === 415, `non-JSON content type -> ${wrongType.status}`);
+  // permission prompt: a build-from-source plugin needs approval; nothing goes live without it
+  const target = s.plugins.find((p) => p.source.type === 'git' && /build/.test(p.name));
+  if (target) {
+    const o = await op('apply', { name: target.name, allowScripts: false });
+    check(o.status === 'error' && o.errorCode === 'NEEDS_PERMISSION' && o.needsTrust?.length, `${target.name}: apply without permission -> ${o.errorCode}`);
+  }
+  // repair is safe and idempotent
+  const r1 = await opOk('repair', {});
+  const r2 = await opOk('repair', {});
+  check(r1.result && r2.result && r2.result.recovered.length === 0, 'repair twice: nothing to recover the second time');
+  // second mutation while one runs is BUSY
+  const first = await call('check', {});
+  let busy = null;
+  try { await call('check', {}); } catch (e) { busy = e; }
+  check(busy === null || busy.code === 'BUSY', `second request while running -> ${busy?.code ?? 'finished already'}`);
+  for (;;) { const o = await call('op', { id: first.opId }); if (o.status !== 'running') break; await sleep(200); }
+});
