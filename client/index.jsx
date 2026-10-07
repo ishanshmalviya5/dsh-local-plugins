@@ -28,7 +28,10 @@ async function call(action, body = {}, { timeoutMs = 15000 } = {}) {
   });
   let data;
   try { data = await res.json(); } catch { throw new Error(`${action}: HTTP ${res.status}`); }
-  if (!data.ok) throw new Error(data.error ?? `${action} failed`);
+  if (!data.ok) {
+    const e = data.error ?? {};
+    throw Object.assign(new Error(typeof e === 'string' ? e : e.message ?? `${action} failed`), { code: e.code, details: e.details });
+  }
   return data.value;
 }
 
