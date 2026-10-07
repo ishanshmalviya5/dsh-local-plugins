@@ -102,7 +102,9 @@ function attentionCount(s) {
   if (!s) return 0;
   let n = s.restartNeeded ? 1 : 0;
   if (s.upgrade) n++;
-  for (const p of s.plugins) if (p.pending || p.update?.available) n++;
+  for (const p of s.plugins) if (p.pending || p.update?.available || p.disabled || p.status?.id === "BROKEN") n++;
+  n += (s.notices ?? []).length;
+  if (s.registryError) n++;
   return n;
 }
 async function openAgentSession(ctx, { path, text }) {
@@ -139,6 +141,8 @@ var c = {
   list: { maxHeight: 260, overflow: "auto", border: "1px solid var(--dsw-alias-border-l2,#e5e7eb)", borderRadius: 8, marginTop: 8 },
   listItem: (active) => ({ display: "flex", justifyContent: "space-between", gap: 8, padding: "6px 10px", cursor: "pointer", fontSize: 13, background: active ? "var(--dsw-specific-sidebar-nav-item-active,#eef2ff)" : "transparent" })
 };
+var STATUS_TONE = { APPLIED: "success", CHANGES_PENDING: "warning", UPDATE_AVAILABLE: "warning", CONFLICT: "danger", LINK_LOST: "warning", REAPPLY_REQUIRED: "warning", BROKEN: "danger", DISABLED: "danger", TRACKED: "neutral" };
+var CRASH_KINDS = ["crash-revert", "crash-recovery", "crash-revert-failed", "registry-rebuilt"];
 var short = (sha) => sha ? String(sha).slice(0, 12) : "\u2014";
 function tilde(str, home) {
   if (!str || !home) return str;
@@ -189,10 +193,14 @@ function OpPanel({ op, lastOp }) {
     (0, import_react.createElement)("pre", { ref, style: c.pre }, shown.log.slice(-200).join("\n"))
   );
 }
-function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
+function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, issues }) {
   const stats = p.stats ?? {};
   const state = p.applied ? p.linkLost ? "Link lost" : "Applied" : "Tracked only";
   const tone = p.applied ? p.linkLost ? "warning" : "success" : "neutral";
+  const st = p.status;
+  const allows = (a) => !st || st.allowed.includes(a);
+  const fixedSinceCrash = !p.disabled || stats.head && stats.head !== p.lastCrash?.localHead || stats.uncommitted > 0;
+  const myIssues = (issues ?? []).filter((i) => i.plugin === p.name && i.severity !== "info");
   const [agentErr, setAgentErr] = (0, import_react.useState)(null);
   const trustAsk = lastOp && lastOp.status === "error" && lastOp.needsTrust && lastOp.request && lastOp.target === p.name ? lastOp : null;
   async function agent(mode) {
@@ -213,7 +221,7 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
       { style: c.row },
       (0, import_react.createElement)("strong", { style: { fontSize: 14 } }, p.name),
       (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: p.kind === "core" ? "info" : "outline" }, p.kind === "core" ? "core" : "third-party"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone }, state),
+      (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: st ? STATUS_TONE[st.id] ?? tone : tone }, st ? st.label : state),
       p.update?.available && !p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, `Update available ${p.update.target && p.update.target !== "upstream" ? short(p.update.target) : ""}`),
       p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "danger" }, "Conflict"),
       p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, "Scripts always allowed")
@@ -243,6 +251,18 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
         (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Abort the update of ${p.name}?`, body: "The merge attempt is thrown away. Your local branch and the live plugin stay as they are.", action: () => run("abort", { name: p.name }) }) }, "Abort")
       )
     ),
+    p.disabled && (0, import_react.createElement)(
+      "div",
+      { style: c.banner("error"), "data-testid": "lp-disabled" },
+      (0, import_react.createElement)("strong", null, "Disabled \u2014 it crashed dsh. "),
+      'It was taken out of dsh so dsh can start. Your repo and commits are untouched. Use "Work on it" to fix it with an agent, commit the fix, then Apply becomes available.'
+    ),
+    myIssues.length > 0 && (0, import_react.createElement)(
+      "div",
+      { style: c.banner(myIssues.some((i) => i.severity === "error") ? "error" : "warn"), "data-testid": "lp-issues" },
+      (0, import_react.createElement)("div", null, myIssues.map((i) => (0, import_react.createElement)("div", { key: i.code }, `\u2022 ${i.message}`))),
+      (0, import_react.createElement)("div", { style: { marginTop: 6 } }, (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => run("repair", {}) }, "Repair installation"))
+    ),
     trustAsk && (0, import_react.createElement)(
       "div",
       { style: c.banner("error"), "data-testid": "lp-trust" },
@@ -259,14 +279,14 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp }) {
     (0, import_react.createElement)(
       "div",
       { style: { ...c.row, marginTop: 10 } },
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy || Boolean(p.pending), onClick: () => run("apply", { name: p.name }) }, p.applied ? "Apply latest commit" : "Apply"),
-      p.update?.available && !p.pending && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => run("update", { name: p.name }) }, "Update"),
-      p.applied && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Restore the original ${p.name}?`, body: p.kind === "core" ? "dsh goes back to the built-in package that shipped with it. Your local repo stays tracked \u2014 click Apply to switch back." : "dsh reinstalls the original version spec it had before (for example ^1.0.0). Your local repo stays tracked \u2014 click Apply to switch back.", action: () => run("restore", { name: p.name }) }) }, "Restore original"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "commit", plugin: p }) }, "Commit"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "rollback", plugin: p }) }, "Deploy older commit\u2026"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "deps", plugin: p }) }, "Dependency overrides"),
+      allows("apply") && fixedSinceCrash && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "apply" || !st ? "primary" : "outline", disabled: busy || Boolean(p.pending), onClick: () => run("apply", { name: p.name }) }, p.applied ? "Apply latest commit" : "Apply"),
+      p.update?.available && allows("update") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "update" ? "primary" : "outline", disabled: busy, onClick: () => run("update", { name: p.name }) }, "Update"),
+      p.applied && allows("restore") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => openModal({ kind: "confirm", title: `Restore the original ${p.name}?`, body: p.kind === "core" ? "dsh goes back to the built-in package that shipped with it. Your local repo stays tracked \u2014 click Apply to switch back." : "dsh reinstalls the original version spec it had before (for example ^1.0.0). Your local repo stays tracked \u2014 click Apply to switch back.", action: () => run("restore", { name: p.name }) }) }, "Restore original"),
+      allows("commit") && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "commit", plugin: p }) }, "Commit"),
+      allows("rollback") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "rollback" ? "outline" : "ghost", disabled: busy, onClick: () => openModal({ kind: "rollback", plugin: p }) }, "Deploy older commit\u2026"),
+      allows("setDep") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "deps", plugin: p }) }, "Dependency overrides"),
       p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => run("trust", { name: p.name, trust: false }) }, "Revoke script permission"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", onClick: () => agent("work") }, "Work on it")
+      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: p.disabled ? "primary" : "ghost", onClick: () => agent(p.disabled ? "crash" : "work") }, "Work on it")
     ),
     agentErr && (0, import_react.createElement)("div", { style: { ...c.muted, color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 6 } }, `Could not open agent session: ${agentErr}`)
   );
@@ -490,6 +510,7 @@ function LocalPluginsSection({ store, ctx, close }) {
       (0, import_react.createElement)(
         "div",
         { style: c.row },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => run("repair", {}), title: "Finish or roll back interrupted operations and make the registry match what is on disk" }, "Repair installation"),
         (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", disabled: busy, onClick: () => run("check", {}) }, "Check now"),
         (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => setModal({ kind: "add" }) }, "+ Add")
       )
@@ -515,15 +536,76 @@ function LocalPluginsSection({ store, ctx, close }) {
       " ",
       (0, import_react.createElement)("button", { style: { border: "none", background: "none", cursor: "pointer", fontSize: 12, color: "inherit" }, onClick: () => setNotice(null) }, "\u2715")
     ),
+    s.registryError && (0, import_react.createElement)(
+      "div",
+      { style: c.banner("error"), "data-testid": "lp-registry-error" },
+      (0, import_react.createElement)("strong", null, "The plugin registry cannot be read. "),
+      s.registryError.message,
+      s.registryError.code !== "REGISTRY_TOO_NEW" && (0, import_react.createElement)("div", { style: { marginTop: 8 } }, (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => run("repair", {}) }, "Repair installation"))
+    ),
+    (s.notices ?? []).map((n) => (0, import_react.createElement)(
+      "div",
+      { key: n.id, style: c.banner(n.kind === "crash-recovery" ? "warn" : "error"), "data-testid": "lp-notice" },
+      (0, import_react.createElement)("div", null, (0, import_react.createElement)("strong", null, n.title)),
+      (0, import_react.createElement)("div", { style: { marginTop: 4, fontSize: 12, lineHeight: 1.5 } }, n.message),
+      (0, import_react.createElement)(
+        "div",
+        { style: { ...c.row, marginTop: 6 } },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "outline", onClick: async () => {
+          await call("dismissNotice", { id: n.id }).catch(() => {
+          });
+          store.refresh();
+        } }, "Dismiss")
+      )
+    )),
     (0, import_react.createElement)(OpPanel, { op: s.op, lastOp: s.lastOp }),
-    s.plugins.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.') : s.plugins.map((p) => (0, import_react.createElement)(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp })),
+    s.plugins.length === 0 ? (0, import_react.createElement)("div", { style: { ...c.card, ...c.muted } }, 'No local plugins yet. Use "+ Add" to migrate an installed plugin or set one up from its origin.') : s.plugins.map((p) => (0, import_react.createElement)(PluginCard, { key: p.name, p, run, busy, ctx, close, openModal: setModal, homePath, lastOp: s.lastOp, issues: s.issues })),
     modalEl
   );
 }
-function SidebarBadge({ store, wide }) {
+function NoticePopup({ store, ctx, notice, onDone }) {
+  const [busy, setBusy] = (0, import_react.useState)(false);
+  async function dismiss() {
+    setBusy(true);
+    await call("dismissNotice", { id: notice.id }).catch(() => {
+    });
+    store.refresh();
+    onDone();
+  }
+  async function work() {
+    setBusy(true);
+    try {
+      const draft = await call("agentDraft", { name: notice.plugin, mode: "crash" });
+      await dismiss();
+      await openAgentSession(ctx, draft);
+    } catch {
+      setBusy(false);
+    }
+  }
+  return (0, import_react.createElement)(
+    import_dsh_client_ui_primitives.Modal,
+    {
+      open: true,
+      onClose: dismiss,
+      title: notice.title,
+      closeLabel: "Close",
+      footer: (0, import_react.createElement)(
+        "div",
+        { style: c.row },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "ghost", disabled: busy, onClick: dismiss }, "OK"),
+        notice.plugin && ["crash-revert", "crash-recovery"].includes(notice.kind) && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "primary", disabled: busy, onClick: work }, "Work on it")
+      )
+    },
+    (0, import_react.createElement)("div", { style: { fontSize: 13, lineHeight: 1.6 }, "data-testid": "lp-popup" }, notice.message)
+  );
+}
+function SidebarBadge({ store, wide, ctx }) {
   const { snapshot } = useStore(store);
+  const [seen, setSeen] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
+  const popup = (snapshot?.notices ?? []).find((n2) => CRASH_KINDS.includes(n2.kind) && !seen.has(n2.id));
+  const popupEl = popup ? (0, import_react.createElement)(NoticePopup, { key: popup.id, store, ctx, notice: popup, onDone: () => setSeen((x) => new Set(x).add(popup.id)) }) : null;
   const n = attentionCount(snapshot);
-  if (!n) return null;
+  if (!n) return popupEl;
   const open = () => {
     const pickSection = (tries = 0) => {
       const cell = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === SECTION_LABEL);
@@ -539,7 +621,7 @@ function SidebarBadge({ store, wide }) {
     title: `${n} local plugin item(s) need attention`,
     onClick: open,
     style: { display: "flex", alignItems: "center", gap: 6, width: wide ? "100%" : 36, height: 32, border: "none", background: "none", cursor: "pointer", padding: wide ? "0 8px" : 0, justifyContent: wide ? "flex-start" : "center", color: "var(--dsw-alias-label-primary,inherit)", fontSize: 13, borderRadius: 8 }
-  }, (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, String(n)), wide ? "Local plugins" : null);
+  }, (0, import_react.createElement)(import_dsh_client_ui_primitives.Tag, { tone: "warning" }, String(n)), wide ? "Local plugins" : null, popupEl);
 }
 function apply(ctx) {
   const store = createStateStore();

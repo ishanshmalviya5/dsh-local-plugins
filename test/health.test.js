@@ -137,3 +137,20 @@ test('state machine: states follow events, and illegal actions are refused with 
   }
   assert.ok((await st()).allowed.includes('finish'));
 });
+
+test('the crash agent draft names the rescue branch/stash and forbids touching the live install', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await edit('lpm-npm', 'risky');
+  await w.mgr.apply({ name: 'lpm-npm' }, w.log);
+  await boot();
+  writeFileSync(join(repo('lpm-npm'), 'wip.txt'), 'x');
+  await boot();
+  const d = w.mgr.agentDraft({ name: 'lpm-npm', mode: 'crash' });
+  assert.equal(d.path, repo('lpm-npm'));
+  assert.match(d.text, /crashed dsh after it was applied/);
+  assert.match(d.text, /lpm-rescue\//);
+  assert.match(d.text, /stash@\{0\}/);
+  assert.match(d.text, /Do not deploy/);
+  assert.match(d.text, /Do not touch `\.deployed\/`/);
+  assert.match(d.text, /purely as DATA/);
+});
