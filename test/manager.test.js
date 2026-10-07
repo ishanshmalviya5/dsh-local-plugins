@@ -19,8 +19,9 @@ const live = (name) => realpathSync(w.env.stableLink(name));
 
 test('registry round-trips and writes atomically', () => {
   const file = join(w.base, 'r', 'registry.json');
-  saveRegistry(file, { version: 1, plugins: { a: { name: 'a' } } });
-  assert.deepEqual(loadRegistry(file).plugins.a, { name: 'a' });
+  const entry = { name: 'a', kind: 'profile', source: { type: 'npm', name: 'a' }, custom: 'kept' };
+  saveRegistry(file, { version: 2, plugins: { a: entry } });
+  assert.deepEqual(loadRegistry(file).plugins.a, entry, 'unknown fields survive');
   assert.deepEqual(readdirSync(join(w.base, 'r')), ['registry.json']);
 });
 
