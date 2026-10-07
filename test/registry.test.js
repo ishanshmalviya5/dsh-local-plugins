@@ -103,3 +103,16 @@ test('state() reports a broken registry instead of throwing; a v1 registry is mi
     assert.equal(JSON.parse(readFileSync(w.env.registryFile, 'utf8')).version, CURRENT_VERSION);
   } finally { w.cleanup(); }
 });
+
+test('startup on a v0.1 registry keeps a backup of the original file (first save, not just boot)', async () => {
+  const w = makeWorld();
+  try {
+    mkdirSync(w.env.root, { recursive: true });
+    const v1 = { version: 1, dshVersion: '0.2.0-rc.2', restartNeeded: false, upgrade: null, plugins: {} };
+    writeFileSync(w.env.registryFile, JSON.stringify(v1));
+    await w.mgr.startup(() => {});
+    assert.equal(JSON.parse(readFileSync(w.env.registryFile, 'utf8')).version, CURRENT_VERSION);
+    assert.equal(JSON.parse(readFileSync(`${w.env.registryFile}.v1.bak`, 'utf8')).version, 1, 'the untouched v1 file is kept');
+    assert.deepEqual(JSON.parse(readFileSync(`${w.env.registryFile}.v1.bak`, 'utf8')), v1);
+  } finally { w.cleanup(); }
+});
