@@ -61,7 +61,7 @@ test('concurrent registry changes survive Add and plugin ops', async () => {
 
 test('Add rejects option-looking input and bad names', async () => {
   for (const input of ['--upload-pack=touch /tmp/pwned.git', '-g', '--registry=http://evil']) {
-    await assert.rejects(w.mgr.addNew({ input }, w.log), /not an option|valid/);
+    await assert.rejects(w.mgr.addNew({ input }, w.log), /command-line option|valid/);
   }
   await assert.rejects(w.mgr.addNew({ input: 'Bad Name' }, w.log), /valid npm package name/);
   await assert.rejects(w.mgr.migrate({ name: '--foo' }, w.log), /valid npm package name/);
@@ -140,7 +140,7 @@ test('a broken merge cannot go live: the load check blocks it and the live plugi
   const pj = JSON.parse(readFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), 'utf8'));
   pj.main = 'gone.js';
   writeFileSync(join(w.env.repoDir('lpm-npm'), 'package.json'), JSON.stringify(pj));
-  await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /missing entry file/);
+  await assert.rejects(w.mgr.apply({ name: 'lpm-npm' }, w.log), /do not exist/);
 });
 
 test('scripts need permission: once, always, and revoke', async () => {

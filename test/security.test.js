@@ -82,7 +82,7 @@ test('input validation: package names, specs and git locations', () => {
   for (const good of ['a', 'my-plugin', '@scope/pkg', '@a/b.c_d', 'dsh-x.y']) assert.equal(assertPackageName(good), good);
   for (const bad of ['', '-x', '--registry=x', 'a b', ' ', null]) assert.throws(() => assertSpec(bad), /valid version or range/, String(bad));
   for (const good of ['^1.2.0', '~1', '1.2.3', 'latest', 'beta', '>=1 <2'.replace(' ', '')]) assert.equal(assertSpec(good), good);
-  for (const bad of ['', '--upload-pack=x', ' ', null]) assert.throws(() => assertGitLocation(bad), /valid git location/, String(bad));
+  for (const bad of ['', '--upload-pack=x', ' ', null]) assert.throws(() => assertGitLocation(bad), /valid git address/, String(bad));
   assert.equal(gitUrl('ext::sh -c id'), null, 'git ext:: transport is never accepted');
   assert.equal(gitUrl('file:///tmp/x.git'), 'file:///tmp/x.git');
 });
