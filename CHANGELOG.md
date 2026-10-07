@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — 2026-10-07 (unreleased)
+## 0.2.0 — 2026-10-07
 
 Hardening release. The architecture is unchanged: dsh only runs a commit, deployments are built aside and switched on atomically, `upstream` / `local` branches, a registry file. Everything below is about making it survive crashes, bad input and upgrades.
 
@@ -25,7 +25,8 @@ Hardening release. The architecture is unchanged: dsh only runs a commit, deploy
 - Agent sessions ("Work on it", "Fix with agent") start in **Creator mode** (the `cordis` preset), falling back to Standard if a dsh has no such preset. Every agent prompt carries the same rules: work through git only, never touch `.deployed/`, the stable link, `.backup/` or the dsh install, never bypass the plugin manager, never discard changes you did not make, which commands are safe.
 - Retention is a setting in the Disk usage panel; leftover trial-merge folders are reported and removed by Clean up; "Copy repo/worktree path" buttons; the operation log records the commit and snapshot each Apply produced.
 - `scripts/undo.mjs`: put the originals back from a terminal when dsh cannot start.
-- Docs: architecture, state machine, recovery, security, API, development, troubleshooting, performance, compatibility.
+- Docs: a use-case-first README with screenshots, plus architecture, state machine, recovery, security, API, development, troubleshooting, performance and a release checklist.
+- `CONTRIBUTING.md`, `AGENTS.md` and a pull-request template (with an AI-assistance disclosure) for human and AI-agent contributors; CI on macOS (Node 26, required) and Ubuntu (Node 22 / 24 / 26, experimental).
 
 ### Changed
 - **Breaking (internal API):** API errors are `{ ok: false, error: { code, message, details } }` (was a string).
