@@ -44,7 +44,7 @@ Status is what has actually been demonstrated, not what is intended. **Shown** =
 | Existing v0.1 tests pass | Shown | all 14 original tests remain (updated only where behaviour intentionally changed: restore spec, error wording, registry shape) |
 | New crash/recovery tests pass | Shown | `recovery.test.js`, `health.test.js` |
 | Fault-injection tests pass | Shown | `LPM_FAIL_AT` at all 17 stages as a simulated crash, the Apply-path stages also as an ordinary failure (`docs/development.md`) |
-| E2E passes | Shown (isolated dsh, macOS) | 15 scenarios, run on this branch |
+| E2E passes | Shown (isolated dsh, macOS) | 17 scenarios (15 from 0.2, plus Apply override and Squash), run on this branch |
 | Package tarball installs correctly | Shown | `npm run check:package` (installs the tarball into an empty project and loads server entry, client bundle, `undo.mjs`, the shipped migration) |
 
 ## Release
