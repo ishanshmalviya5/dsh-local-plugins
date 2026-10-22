@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-22
+
+### Added
+- **Squash my changes.** An agent (Creator mode) collapses all your commits on `local` into one commit on top of the original release, so the next update merges cleanly. It makes a `lpm-backup/pre-squash-*` branch first, refuses while an update is unfinished or when `upstream` is ahead, and must show that the code is byte-for-byte unchanged. The button appears when you have changes versus the original. API: `agentDraft` mode `squash`.
+- **Apply override.** In Dependency overrides, one button saves the override, applies it and verifies it: the committed `package.json`, the live deployment and the installed dependency version must all agree. The dialog shows ✔ Verified or what is wrong. API: `applyDep`.
+
+### Fixed
+- The sidebar badge now opens Settings → Local Plugins when dsh's account package replaces the plain Settings button with an account menu.
+
 ## 0.2.1 — 2026-10-07
 
 ### Fixed

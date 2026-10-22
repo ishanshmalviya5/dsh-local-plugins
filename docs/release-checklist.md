@@ -1,4 +1,4 @@
-# v0.2 release checklist
+# Release checklist
 
 Status is what has actually been demonstrated, not what is intended. **Shown** = an automated test or measurement exists and passes. **Manual** = checked by hand in the isolated environment. **Not shown** = say so plainly.
 
@@ -62,9 +62,9 @@ Status is what has actually been demonstrated, not what is intended. **Shown** =
 ## Definition of done — the three invariants
 1. *At every crash point the user has the previous or the new valid deployment, and the system can detect and recover everything between.* — fault-injection matrix + journal recovery + `repair`.
 2. *Registry, git, filesystem and the dsh install never silently disagree.* — `reconcile` (see [recovery.md](recovery.md)), adoption of v0.1 deployments, `state().issues` shown on every card.
-3. *No operation silently destroys committed work or the original dsh installation.* — originals go to `.backup`, deleted repos to `.trash`, user work to stash + rescue branch before any revert, `local` is never rewritten, tamper-proof path checks.
+3. *No operation silently destroys committed work or the original dsh installation.* — originals go to `.backup`, deleted repos to `.trash`, user work to stash + rescue branch before any revert, `local` is rewritten only by the opt-in Squash agent, and only after a backup branch exists and the code is verified unchanged, tamper-proof path checks.
 
 ## Where the release stands
-Done: 0.2.0 is merged, CI is green, tagged (`v0.2.0`), released on GitHub with the validated package attached, and published to npm. 0.2.1 (the corrected `LICENSE` text) follows the same path: merge, CI, tag, release, npm.
+Done: 0.2.0 and 0.2.1 are released. 0.3.0 (Squash my changes, Apply override with verification, sidebar badge with the account menu) is prepared on `release/0.3.0` and follows the same path. Earlier: 0.2.0 is merged, CI is green, tagged (`v0.2.0`), released on GitHub with the validated package attached, and published to npm. 0.2.1 (the corrected `LICENSE` text) follows the same path: merge, CI, tag, release, npm.
 * An end-to-end run on a Linux machine, so the compatibility table can say more than "unit tests and package validation pass in CI".
 * Widening `engines` / `os` only after that run.

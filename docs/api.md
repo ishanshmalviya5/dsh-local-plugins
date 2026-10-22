@@ -33,7 +33,7 @@ Responses are JSON. This is the contract the bundled web client uses; `apiVersio
 | `state` | — | `{ apiVersion, bootId, env, restartNeeded, upgrade, op, lastOp, plugins[], quarantine, settings, notices[], issues[], registryError? }`. Each plugin carries `status { id, label, primary, allowed[], invalid[] }` and `git { local, upstream, deployed, uncommitted, notApplied, … }`. A damaged registry is reported as `registryError` instead of an HTTP error. |
 | `installed` | — | `{ profile[], core[] }` — plugins that could be migrated. |
 | `commits` | `{ name }` | `{ commits[] }` newest first (for "deploy older commit"). |
-| `agentDraft` | `{ name, mode?: "work"\|"conflict"\|"crash" }` | `{ path, text }` — a prefilled, unsent agent prompt. |
+| `agentDraft` | `{ name, mode?: "work"\|"conflict"\|"crash"\|"squash" }` | `{ path, text }` — a prefilled, unsent agent prompt. |
 | `op` | `{ id }` | the operation (`status`, `log`, `error`, `errorCode`, `needsTrust`, `request`, `durationMs`). |
 | `history` | — | `{ operations[] }` newest first (no logs inline; `op` returns one with its log) |
 | `diskUsage` | — | `{ plugins{ name: { repo, snapshots, snapshotCount, worktrees, backups, total } }, trash, total }` (measured on demand) |
@@ -55,6 +55,7 @@ Responses are JSON. This is the contract the bundled web client uses; `apiVersio
 | `restore` | `{ name }` | Reinstall the original (its exact original spec). Repeating it is a no-op. |
 | `commit` | `{ name, message? }` | Commit the working tree on `local`. |
 | `setDep` | `{ name, dep, range }` | `range: null` removes the override. |
+| `applyDep` | `{ name, dep?, range?, allowScripts?, alwaysAllow? }` | Save the override (if `dep` is given), apply, then verify it is in the committed `package.json`, the deployment and the installed dependency. Result carries `verified`; the outcome is kept as `overrideCheck` in the plugin state. A failed verification is an error. |
 | `trust` | `{ name, trust }` | Grant/revoke "always allow scripts". |
 | `delete` | `{ name, confirmName }` | Stop tracking a plugin: its repo moves to `.trash/`. Needs the exact name typed back; refused while applied (`NOT_UNLINKED`) or mid-update. |
 | `cleanup` | `{ execute? }` | Remove snapshots beyond retention and leftover trial-merge folders (preview with `cleanupPreview`). Never the live one or the rollback target. |

@@ -15,6 +15,8 @@
 | **Go back** when a change misbehaves | **Deploy older commit…** | The earlier version, instantly |
 | **Customize a built-in dsh feature** (for example a model provider) | the same steps, on a built-in plugin | Your version runs; **Unlink** gives the original back |
 | **Let an AI agent change a plugin safely** | **Work on it** | An agent opens inside that plugin's folder with the context filled in; it can't switch anything on — only you can |
+| **Keep your history tidy so updates stay easy** | **Squash my changes** | An agent collapses all your commits into one on top of the original release; a backup branch is made first and it checks the code is unchanged |
+| **Pin a dependency to a newer version** | **Dependency overrides → Apply override** | The override is saved, deployed and checked: you see a ✔ only when it is really installed |
 | **Recover after dsh was upgraded or reinstalled** | **Reapply all** | Your customizations are switched back on |
 | **Try one exact version** | **+ Add**, `name@1.2.3` (or `…#v1.2.0`) | That version, and it stays put |
 | **See what you changed versus the original** | look at the card | "3 files changed vs original", and what is running right now |
@@ -105,7 +107,7 @@ For npm plugins: `name`, `name@1.2.3` or `name@beta`. For plugins from git: a we
 
 How this is guaranteed: [Security](docs/security.md) · [Recovery](docs/recovery.md) · [How it works](docs/architecture.md).
 
-## Compatibility — dsh-local-plugins 0.2.1
+## Compatibility — dsh-local-plugins 0.3.0
 
 | Where | Status |
 |---|---|
