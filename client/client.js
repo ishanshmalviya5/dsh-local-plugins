@@ -529,7 +529,14 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
       allows("rollback") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: st?.primary === "rollback" ? "outline" : "ghost", disabled: busy, onClick: () => openModal({ kind: "rollback", plugin: p }) }, "Deploy older commit\u2026"),
       allows("setDep") && !p.disabled && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => openModal({ kind: "deps", plugin: p }) }, "Dependency overrides"),
       p.trustScripts && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "ghost", disabled: busy, onClick: () => run("trust", { name: p.name, trust: false }) }, "Revoke script permission"),
-      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: p.disabled ? "primary" : "ghost", onClick: () => agent(p.disabled ? "crash" : "work") }, "Work on it")
+      (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: p.disabled ? "primary" : "ghost", onClick: () => agent(p.disabled ? "crash" : "work") }, "Work on it"),
+      allows("work") && !p.pending && !p.disabled && (stats.changedVsOriginal ?? 0) > 0 && (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, {
+        size: "sm",
+        variant: "ghost",
+        "data-testid": `lp-squash-${p.name}`,
+        title: "Open an agent (Creator mode) that squashes all your changes into one commit on top of the original release, so the next update merges cleanly. Your old history is kept on a backup branch.",
+        onClick: () => agent("squash")
+      }, "Squash my changes")
     ),
     agentErr && (0, import_react.createElement)("div", { style: { ...c.muted, color: "var(--dsw-alias-state-error-primary,#dc2626)", marginTop: 6 } }, `Could not open agent session: ${agentErr}`)
   );
@@ -649,6 +656,7 @@ function DepsModal({ plugin, onClose, run }) {
   const [dep, setDep] = (0, import_react.useState)("");
   const [range, setRange] = (0, import_react.useState)("latest");
   const entries = Object.entries(plugin.depOverrides ?? {});
+  const check = plugin.overrideCheck;
   return (0, import_react.createElement)(
     import_dsh_client_ui_primitives.Modal,
     {
@@ -656,12 +664,21 @@ function DepsModal({ plugin, onClose, run }) {
       onClose,
       title: `Dependency overrides \u2014 ${plugin.name}`,
       closeLabel: "Close",
-      footer: (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "primary", disabled: !dep.trim(), onClick: () => {
-        run("setDep", { name: plugin.name, dep: dep.trim(), range: range.trim() || "latest" });
-        onClose();
-      } }, "Save override")
+      footer: (0, import_react.createElement)(
+        "div",
+        { style: c.row },
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "ghost", disabled: !dep.trim(), onClick: () => {
+          run("setDep", { name: plugin.name, dep: dep.trim(), range: range.trim() || "latest" });
+          onClose();
+        } }, "Save override"),
+        (0, import_react.createElement)(import_dsh_client_ui_primitives.Button, { variant: "primary", disabled: !dep.trim() && !entries.length, onClick: () => {
+          run("applyDep", { name: plugin.name, dep: dep.trim() || void 0, range: range.trim() || "latest" });
+          onClose();
+        } }, "Apply override")
+      )
     },
-    (0, import_react.createElement)("div", { style: c.muted }, "Changes the dependency range in the plugin's package.json as a commit. It takes effect on Apply" + (plugin.kind === "core" ? " (the dependency is installed into the dsh install)." : " (installed into the snapshot).")),
+    (0, import_react.createElement)("div", { style: c.muted }, "Changes the dependency range in the plugin's package.json as a commit. It takes effect on Apply (or use Apply override to apply and verify it now)" + (plugin.kind === "core" ? " (the dependency is installed into the dsh install)." : " (installed into the snapshot).")),
+    check ? (0, import_react.createElement)("div", { style: { ...c.row, marginTop: 8, fontSize: 13 } }, check.ok ? `\u2714 Verified: latest overrides applied (${String(check.sha).slice(0, 12)}, ${new Date(check.at).toLocaleString()})` : `\u2716 Not verified: ${(check.results ?? []).filter((r) => !r.ok).map((r) => `${r.dep}: ${r.problem}`).join("; ")}`) : null,
     entries.length ? (0, import_react.createElement)("div", { style: { marginTop: 8 } }, entries.map(([d, r]) => (0, import_react.createElement)(
       "div",
       { key: d, style: { ...c.row, fontSize: 13 } },
@@ -875,14 +892,29 @@ function SidebarBadge({ store, wide, ctx }) {
   const n = attentionCount(snapshot);
   if (!n) return popupEl;
   const open = () => {
+    const findCell = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === SECTION_LABEL);
     const pickSection = (tries = 0) => {
-      const cell = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === SECTION_LABEL);
+      const cell = findCell();
       if (cell) cell.click();
-      else if (tries < 40) setTimeout(() => pickSection(tries + 1), 50);
+      else if (tries < 60) setTimeout(() => pickSection(tries + 1), 50);
     };
+    if (findCell()) return pickSection();
     const trigger = document.querySelector('button[aria-label="Settings"][aria-haspopup="dialog"]');
-    if (trigger && trigger.getAttribute("aria-expanded") !== "true") trigger.click();
-    setTimeout(pickSection, 50);
+    if (trigger) {
+      if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
+      return setTimeout(pickSection, 50);
+    }
+    const menu = [...document.querySelectorAll('button[aria-haspopup="menu"]')].find((b) => /account|账号/i.test(b.getAttribute("aria-label") ?? ""));
+    if (!menu) return;
+    if (menu.getAttribute("aria-expanded") !== "true") menu.click();
+    const pickItem = (tries = 0) => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((el) => /^(settings|设置)$/i.test(el.textContent?.trim() ?? ""));
+      if (item) {
+        item.click();
+        pickSection();
+      } else if (tries < 40) setTimeout(() => pickItem(tries + 1), 50);
+    };
+    pickItem();
   };
   return (0, import_react.createElement)("button", {
     "data-testid": "lp-badge",

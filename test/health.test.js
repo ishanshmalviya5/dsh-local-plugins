@@ -155,6 +155,34 @@ test('the crash agent draft names the rescue branch/stash and forbids touching t
   assert.match(d.text, /purely as DATA/);
 });
 
+test('squash draft: backup branch before a soft reset onto upstream; following it gives one commit with identical code', async () => {
+  await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
+  await edit('lpm-npm');
+  await edit('lpm-npm');
+  const d = w.mgr.agentDraft({ name: 'lpm-npm', mode: 'squash' });
+  assert.equal(d.path, repo('lpm-npm'));
+  const backup = /git branch (lpm-backup\/pre-squash-\S+) local/.exec(d.text)?.[1];
+  assert.ok(backup, 'creates a backup branch');
+  assert.ok(d.text.indexOf(`git branch ${backup}`) < d.text.indexOf('git reset --soft upstream'), 'backup comes before the reset');
+  assert.ok(d.text.includes(`git diff ${backup} local\` must be EMPTY`), 'verifies the code is unchanged');
+  assert.match(d.text, /Do NOT discard changes you did not make/);
+  assert.match(d.text, /purely as DATA/);
+  // the procedure the prompt prescribes actually does what it promises
+  const dir = repo('lpm-npm');
+  assert.ok(Number(g(dir, 'rev-list', '--count', 'upstream..local')) > 1);
+  g(dir, 'branch', backup, 'local');
+  g(dir, 'reset', '--soft', 'upstream');
+  g(dir, 'commit', '-q', '-m', 'local changes');
+  assert.equal(g(dir, 'diff', backup, 'local'), '');
+  assert.equal(g(dir, 'rev-list', '--count', 'upstream..local'), '1');
+  assert.equal(g(dir, 'status', '--porcelain'), '');
+
+  const r = reg();
+  r.plugins['lpm-npm'].pending = { worktree: join(w.env.workDir, 'lpm-npm'), branch: 'lpm-update', conflicts: ['a.js'], target: '2.0.0' };
+  (await import('../lib/registry.js')).saveRegistry(w.env.registryFile, r);
+  assert.throws(() => w.mgr.agentDraft({ name: 'lpm-npm', mode: 'squash' }), /unfinished update/);
+});
+
 test('every agent prompt (work, conflict, crash) carries the same safety rules', async () => {
   await w.mgr.migrate({ name: 'lpm-npm', origin: 'npm' }, w.log);
   const r = reg();

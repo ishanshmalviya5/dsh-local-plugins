@@ -18,7 +18,7 @@ Requirements: Node >= 26, `git` and `npm` on `PATH`, macOS or Linux. Tested by t
 | Layer | Where | What |
 |---|---|---|
 | unit / integration | `test/*.test.js` | registry schema + migrations, state machine, journal + recovery, fault injection at every stage, crash loop, rollback/retention, git/npm sources (fake `npm`, local bare repos), overrides, security (tampered registry, hostile tarballs, traversal, permissions), API contract (mock requests), process runner, v0.1 upgrade |
-| end to end | `test/e2e/api-scenarios.mjs` | 15 scenarios over HTTP against a real, isolated dsh on `:3091` (`DSH_HOME=~/.dsh-test/home`) — never your real one |
+| end to end | `test/e2e/api-scenarios.mjs` | 17 scenarios over HTTP against a real, isolated dsh on `:3091` (`DSH_HOME=~/.dsh-test/home`) — never your real one |
 | performance | `test/bench.mjs` | see [performance.md](performance.md) |
 
 ### Fault injection

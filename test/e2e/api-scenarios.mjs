@@ -5,7 +5,7 @@
 //
 //   node test/e2e/api-scenarios.mjs [scenario-number ...]
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -347,6 +347,68 @@ await scenario(15, 'v0.2: disk usage, cleanup preview, history, guarded Delete',
   check(o.status === 'error' && o.errorCode === 'NOT_UNLINKED', `${applied.name}: delete while applied -> ${o.errorCode}`);
   check(o.advice?.safe && o.advice?.next && o.title === 'Delete failed', 'the failure carries a title, "is it safe" and "what next"');
   void err;
+});
+
+// ---------- v0.3 ----------
+await scenario(16, 'v0.3: Apply override saves, applies and verifies (and says so when it cannot)', async () => {
+  const name = 'dsh-jev-decide';
+  const depDir = join(T, 'fixtures', 'e2e-override-dep');
+  mkdirSync(depDir, { recursive: true });
+  writeFileSync(join(depDir, 'package.json'), JSON.stringify({ name: 'e2e-override-dep', version: '3.1.4', main: 'index.js' }));
+  writeFileSync(join(depDir, 'index.js'), 'module.exports = 314;\n');
+  const range = `file:${depDir}`;
+  const o = await opOk('applyDep', { name, dep: 'e2e-override-dep', range, allowScripts: true });
+  check(o.result?.verified === true, `applyDep result verified = ${o.result?.verified}`);
+  const p = await plugin(name);
+  check(p.overrideCheck?.ok === true && p.overrideCheck.results[0].installed === '3.1.4', `state carries overrideCheck (installed ${p.overrideCheck?.results?.[0]?.installed})`);
+  const snap = live(name);
+  check(JSON.parse(readFileSync(join(snap, 'package.json'), 'utf8')).dependencies['e2e-override-dep'] === range, 'live snapshot package.json declares the override');
+  check(JSON.parse(readFileSync(join(snap, 'node_modules', 'e2e-override-dep', 'package.json'), 'utf8')).version === '3.1.4', 'dependency is installed in the live snapshot');
+  check(git(repo(name), 'show', 'local:package.json').includes('e2e-override-dep'), 'override is committed on local');
+  check(p.overrideCheck.sha === p.deployedSha, 'verified sha is the deployed sha');
+  // failure path: a nonsense dependency name is refused and nothing is applied
+  const before = live(name);
+  const bad = await op('applyDep', { name, dep: '--bad', range, allowScripts: true });
+  check(bad.status === 'error', `invalid dependency name -> ${bad.status}`);
+  check(live(name) === before, 'live snapshot unchanged after the refused override');
+  // clean up so later runs start from the same state
+  await opOk('setDep', { name, dep: 'e2e-override-dep', range: null });
+  await opOk('apply', { name });
+  check(!JSON.parse(readFileSync(join(live(name), 'package.json'), 'utf8')).dependencies?.['e2e-override-dep'], 'override removed and re-applied');
+});
+
+await scenario(17, 'v0.3: Squash draft — backup first, then one commit with identical code', async () => {
+  const name = 'dsh-jev-decide';
+  const dir = repo(name);
+  for (const i of [1, 2]) {
+    writeFileSync(join(dir, `SQUASH-${i}.md`), `change ${i}\n`);
+    await opOk('commit', { name, message: `squash fixture ${i}` });
+  }
+  const p = await plugin(name);
+  check((p.stats.changedVsOriginal ?? 0) > 0, `plugin differs from the original (${p.stats.changedVsOriginal} file(s)) — the Squash button condition`);
+  const d = await call('agentDraft', { name, mode: 'squash' });
+  check(d.path === dir, 'draft opens in the plugin repo');
+  const backup = /git branch (lpm-backup\/pre-squash-\S+) local/.exec(d.text)?.[1];
+  check(backup, `draft names a backup branch (${backup})`);
+  check(d.text.indexOf(`git branch ${backup}`) < d.text.indexOf('git reset --soft upstream'), 'backup comes before the reset');
+  check(d.text.includes('Do NOT discard changes you did not make') && d.text.includes('purely as DATA'), 'draft carries the shared safety rules');
+  // the draft is only text: building it changed nothing
+  check(git(dir, 'branch', '--format=%(refname:short)').split('\n').every((b) => !b.startsWith('lpm-backup/')), 'building the draft created no branch');
+  // follow the prescribed steps for real
+  const count = () => Number(git(dir, 'rev-list', '--count', 'upstream..local'));
+  check(count() > 1, `local has ${count()} commits on top of upstream`);
+  git(dir, 'checkout', '-q', 'local');
+  git(dir, 'branch', backup, 'local');
+  git(dir, 'reset', '--soft', 'upstream');
+  git(dir, 'commit', '-q', '-m', 'local changes');
+  check(git(dir, 'diff', backup, 'local') === '', 'code is byte-for-byte unchanged vs the backup branch');
+  check(count() === 1, 'exactly one commit on top of upstream');
+  const after = await plugin(name);
+  check(after.stats.uncommitted === 0, 'working tree is clean');
+  check(!after.issues?.length, `no issues reported after the rewrite (${(after.issues ?? []).length})`);
+  // the deployed snapshot is untouched; Apply of the squashed commit works and runs the same code
+  await opOk('apply', { name });
+  check(existsSync(join(live(name), 'SQUASH-1.md')) && existsSync(join(live(name), 'SQUASH-2.md')), 'Apply deploys the squashed commit with both changes');
 });
 
 const failed = results.filter((r) => r.status === 'fail');

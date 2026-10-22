@@ -372,7 +372,12 @@ function PluginCard({ p, run, busy, ctx, close, openModal, homePath, lastOp, iss
       allows('rollback') && !p.disabled && h(Button, { size: 'sm', variant: st?.primary === 'rollback' ? 'outline' : 'ghost', disabled: busy, onClick: () => openModal({ kind: 'rollback', plugin: p }) }, 'Deploy older commit…'),
       allows('setDep') && !p.disabled && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => openModal({ kind: 'deps', plugin: p }) }, 'Dependency overrides'),
       p.trustScripts && h(Button, { size: 'sm', variant: 'ghost', disabled: busy, onClick: () => run('trust', { name: p.name, trust: false }) }, 'Revoke script permission'),
-      h(Button, { size: 'sm', variant: p.disabled ? 'primary' : 'ghost', onClick: () => agent(p.disabled ? 'crash' : 'work') }, 'Work on it')),
+      h(Button, { size: 'sm', variant: p.disabled ? 'primary' : 'ghost', onClick: () => agent(p.disabled ? 'crash' : 'work') }, 'Work on it'),
+      allows('work') && !p.pending && !p.disabled && (stats.changedVsOriginal ?? 0) > 0 && h(Button, {
+        size: 'sm', variant: 'ghost', 'data-testid': `lp-squash-${p.name}`,
+        title: 'Open an agent (Creator mode) that squashes all your changes into one commit on top of the original release, so the next update merges cleanly. Your old history is kept on a backup branch.',
+        onClick: () => agent('squash'),
+      }, 'Squash my changes')),
     agentErr && h('div', { style: { ...c.muted, color: 'var(--dsw-alias-state-error-primary,#dc2626)', marginTop: 6 } }, `Could not open agent session: ${agentErr}`));
 }
 
@@ -445,9 +450,15 @@ function DepsModal({ plugin, onClose, run }) {
   const [dep, setDep] = useState('');
   const [range, setRange] = useState('latest');
   const entries = Object.entries(plugin.depOverrides ?? {});
+  const check = plugin.overrideCheck;
   return h(Modal, { open: true, onClose, title: `Dependency overrides — ${plugin.name}`, closeLabel: 'Close',
-    footer: h(Button, { variant: 'primary', disabled: !dep.trim(), onClick: () => { run('setDep', { name: plugin.name, dep: dep.trim(), range: range.trim() || 'latest' }); onClose(); } }, 'Save override') },
-  h('div', { style: c.muted }, 'Changes the dependency range in the plugin\'s package.json as a commit. It takes effect on Apply' + (plugin.kind === 'core' ? ' (the dependency is installed into the dsh install).' : ' (installed into the snapshot).')),
+    footer: h('div', { style: c.row },
+      h(Button, { variant: 'ghost', disabled: !dep.trim(), onClick: () => { run('setDep', { name: plugin.name, dep: dep.trim(), range: range.trim() || 'latest' }); onClose(); } }, 'Save override'),
+      h(Button, { variant: 'primary', disabled: !dep.trim() && !entries.length, onClick: () => { run('applyDep', { name: plugin.name, dep: dep.trim() || undefined, range: range.trim() || 'latest' }); onClose(); } }, 'Apply override')) },
+  h('div', { style: c.muted }, 'Changes the dependency range in the plugin\'s package.json as a commit. It takes effect on Apply (or use Apply override to apply and verify it now)' + (plugin.kind === 'core' ? ' (the dependency is installed into the dsh install).' : ' (installed into the snapshot).')),
+  check ? h('div', { style: { ...c.row, marginTop: 8, fontSize: 13 } }, check.ok
+    ? `✔ Verified: latest overrides applied (${String(check.sha).slice(0, 12)}, ${new Date(check.at).toLocaleString()})`
+    : `✖ Not verified: ${(check.results ?? []).filter((r) => !r.ok).map((r) => `${r.dep}: ${r.problem}`).join('; ')}`) : null,
   entries.length ? h('div', { style: { marginTop: 8 } }, entries.map(([d, r]) => h('div', { key: d, style: { ...c.row, fontSize: 13 } },
     h('span', { style: c.mono }, `${d} → ${r}`),
     h(Button, { size: 'sm', variant: 'ghost', onClick: () => { run('setDep', { name: plugin.name, dep: d, range: null }); onClose(); } }, 'Remove')))) : null,
@@ -605,14 +616,28 @@ function SidebarBadge({ store, wide, ctx }) {
   // Settings exposes no "open section" API to plugins, and the `settings.open`
   // shortcut is ignored when invoked from a plugin, so drive the shell's own
   // controls: the sidebar Settings trigger, then our nav entry.
+  // When the account package is installed it replaces the plain Settings button with an
+  // account menu (`settings.launcher`) whose first item opens Settings, so handle both.
   const open = () => {
+    const findCell = () => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === SECTION_LABEL);
     const pickSection = (tries = 0) => {
-      const cell = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === SECTION_LABEL);
-      if (cell) cell.click(); else if (tries < 40) setTimeout(() => pickSection(tries + 1), 50);
+      const cell = findCell();
+      if (cell) cell.click(); else if (tries < 60) setTimeout(() => pickSection(tries + 1), 50);
     };
+    if (findCell()) return pickSection();
     const trigger = document.querySelector('button[aria-label="Settings"][aria-haspopup="dialog"]');
-    if (trigger && trigger.getAttribute('aria-expanded') !== 'true') trigger.click();
-    setTimeout(pickSection, 50);
+    if (trigger) {
+      if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click();
+      return setTimeout(pickSection, 50);
+    }
+    const menu = [...document.querySelectorAll('button[aria-haspopup="menu"]')].find((b) => /account|账号/i.test(b.getAttribute('aria-label') ?? ''));
+    if (!menu) return;
+    if (menu.getAttribute('aria-expanded') !== 'true') menu.click();
+    const pickItem = (tries = 0) => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((el) => /^(settings|设置)$/i.test(el.textContent?.trim() ?? ''));
+      if (item) { item.click(); pickSection(); } else if (tries < 40) setTimeout(() => pickItem(tries + 1), 50);
+    };
+    pickItem();
   };
   return h('button', {
     'data-testid': 'lp-badge',

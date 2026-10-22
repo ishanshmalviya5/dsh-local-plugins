@@ -271,3 +271,21 @@ test('git origin with release tags: updates follow the newest stable tag, not br
   assert.ok(!existsSync(join(dir, 'after-release.js')), 'post-release commits are not pulled');
   assert.equal(reg().plugins['lpm-tagged'].upstreamVersion, 'v1.1.0');
 });
+
+test('applyDep saves, applies and verifies an override end to end', async () => {
+  const { mkdirSync } = await import('node:fs');
+  const depDir = join(w.base, 'deps', 'dep-v');
+  mkdirSync(depDir, { recursive: true });
+  writeFileSync(join(depDir, 'package.json'), JSON.stringify({ name: 'dep-v', version: '2.0.0', main: 'index.js' }));
+  writeFileSync(join(depDir, 'index.js'), 'module.exports = 2;\n');
+  makeTarball(w.fixtures, 'lpm-av', '1.0.0', { 'index.js': 'export {};\n', 'package.json': { name: 'lpm-av', version: '1.0.0', type: 'module', main: 'index.js' } });
+  await w.mgr.addNew({ input: 'lpm-av' }, w.log);
+  const range = `file:${depDir}`;
+  const r = await w.mgr.applyDep({ name: 'lpm-av', dep: 'dep-v', range, allowScripts: true }, w.log);
+  assert.equal(r.verified, true);
+  const p = reg().plugins['lpm-av'];
+  assert.equal(p.overrideCheck.ok, true);
+  assert.equal(p.overrideCheck.sha, p.deployedSha);
+  assert.equal(p.overrideCheck.results[0].installed, '2.0.0');
+  await assert.rejects(w.mgr.applyDep({ name: 'lpm-av', dep: '--bad', range }, w.log), /valid npm package name/);
+});
